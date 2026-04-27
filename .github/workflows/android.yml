@@ -1,0 +1,84 @@
+name: Build Android .so
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        abi: [arm64-v8a, x86_64]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up NDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install NDK
+        run: sdkmanager "ndk;28.0.13004108"
+
+      - name: Install CMake + Ninja
+        run: sudo apt-get install -y cmake ninja-build
+
+      - name: Configure (${{ matrix.abi }})
+        run: |
+          cmake -B build-${{ matrix.abi }} \
+            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${{ matrix.abi }} \
+            -DANDROID_PLATFORM=android-28 \
+            -DLSFGVK_ANDROID_WINE=ON \
+            -DVOLK_STATIC_DEFINES=VK_USE_PLATFORM_ANDROID_KHR \
+            "-DCMAKE_CXX_FLAGS=-DVK_USE_PLATFORM_ANDROID_KHR" \
+            "-DCMAKE_C_FLAGS=-DVK_USE_PLATFORM_ANDROID_KHR" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -G Ninja
+
+      - name: Build (${{ matrix.abi }})
+        run: ninja -C build-${{ matrix.abi }}
+
+      - name: Strip (${{ matrix.abi }})
+        run: |
+          $ANDROID_NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip \
+            --strip-unneeded \
+            -o build-${{ matrix.abi }}/liblsfg-vk-${{ matrix.abi }}.so \
+            build-${{ matrix.abi }}/liblsfg-vk.so
+
+      - name: Upload artifact (${{ matrix.abi }})
+        uses: actions/upload-artifact@v4
+        with:
+          name: liblsfg-vk-${{ matrix.abi }}
+          path: build-${{ matrix.abi }}/liblsfg-vk-${{ matrix.abi }}.so
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: List release assets
+        run: ls -lh release-assets/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*.so
+          generate_release_notes: true
+          tag_name: ${{ github.ref_name }}
