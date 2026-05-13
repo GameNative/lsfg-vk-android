@@ -70,9 +70,11 @@ jobs:
     name: Tag Android release
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/release'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/release' && !contains(github.event.head_commit.message, '[skip android release]')
     permissions:
       contents: write
+    outputs:
+      tag_name: ${{ steps.tag.outputs.tag_name }}
 
     steps:
       - name: Checkout repository
@@ -81,6 +83,7 @@ jobs:
           fetch-depth: 0
 
       - name: Create next Android release tag
+        id: tag
         shell: bash
         run: |
           set -euo pipefail
@@ -90,6 +93,7 @@ jobs:
           existing_tag="$(git tag --points-at "$GITHUB_SHA" -l 'v*-android' | head -n1 || true)"
           if [[ -n "$existing_tag" ]]; then
             echo "Tag already exists for this commit: $existing_tag"
+            echo "tag_name=$existing_tag" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -113,12 +117,17 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$next_tag" "$GITHUB_SHA" -m "Release $next_tag"
           git push origin "refs/tags/$next_tag"
+          echo "tag_name=$next_tag" >> "$GITHUB_OUTPUT"
 
   release:
     name: Publish GitHub release
-    needs: build
+    needs: [build, tag_release]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: |
+      needs.build.result == 'success' && (
+        startsWith(github.ref, 'refs/tags/v') ||
+        (github.event_name == 'push' && github.ref == 'refs/heads/release' && needs.tag_release.result == 'success')
+      )
     permissions:
       contents: write
 
@@ -132,8 +141,21 @@ jobs:
       - name: List release assets
         run: ls -lh release-assets/
 
+      - name: Resolve release tag
+        id: vars
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "tag_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_name=${{ needs.tag_release.outputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.vars.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
           files: release-assets/*.so
           generate_release_notes: true
