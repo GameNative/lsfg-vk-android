@@ -131,10 +131,8 @@ void Context::present(Vulkan& vk,
         int inSem, const std::vector<int>& outSem) {
     auto& data = this->data.at(this->frameIdx % 8);
 
-    // 3. wait for completion of previous frame in this slot. Bounded: on a
-    // saturated GPU an unbounded wait freezes the game's present thread.
-    // The throw happens before any per-frame state changes, so the caller
-    // can retry or fall back to passthrough cleanly.
+    // 3. wait for completion of previous frame in this slot; bounded, and
+    // thrown before any per-frame state changes so the caller can retry
     if (data.shouldWait)
         for (auto& fence : data.completionFences)
             if (!fence.wait(vk.device, 2'000'000'000ull))

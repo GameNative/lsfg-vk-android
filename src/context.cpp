@@ -260,11 +260,8 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
         : VK_FORMAT_R16G16B16A16_SFLOAT;
 
 #ifdef __ANDROID__
-    // Android path: single-device framegen. All images live on the game's own
-    // device and every dispatch runs on the game's queue — two different ICDs
-    // (e.g. turnip for the game, the system driver for a private framegen
-    // device) interpret shared AHB memory differently and scramble it, so no
-    // cross-device sharing is used at all.
+    // Android: single-device framegen on the game's own device and queue —
+    // two ICDs interpret shared AHB memory differently and scramble it.
 
     this->preCopyFence = Mini::Fence(info.device, true);
 
@@ -284,8 +281,7 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
     setenv("DISABLE_LSFG", "1", 1); // NOLINT
 
     const auto shaderLoader = [](const std::string& name) {
-        // debug override: a raw SPIR-V file next to conf.toml replaces the
-        // translated DLL shader (override_<name>.spv, brackets -> underscores)
+        // debug override: override_<name>.spv next to conf.toml (brackets -> underscores)
         const auto& confFile = Config::activeConf.config_file;
         if (!confFile.empty()) {
             std::string fname = "override_" + name + ".spv";
@@ -677,9 +673,7 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     if (this->lastRealPresentNs != 0 && this->pacerAnchorNs > this->lastRealPresentNs) {
         const uint64_t delta = static_cast<uint64_t>(
             this->pacerAnchorNs - this->lastRealPresentNs);
-        // A delta this large is a pause/resume, not a slow frame; feeding it
-        // into the EWMA would mis-pace generated frames for seconds while it
-        // decays. Re-learn from scratch instead.
+        // a delta this large is a pause/resume, not a slow frame
         if (delta > 250'000'000ull)
             this->baseIntervalEwmaNs = 0;
         else
@@ -764,11 +758,8 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
         this->preCopyFence.handle());
     const int64_t workStartNs = nowNs();
 
-    // 2. Tell framegen to generate intermediary frames
-    //    presentContext(id, -1, {}) — no semaphore FDs, synchronous.
-    //    A graph-side fence timeout counts toward the same watchdog as the
-    //    copy fence: enough of them disables framegen for this swapchain
-    //    (full-speed passthrough) instead of a 2s-stall-per-frame loop.
+    // 2. Tell framegen to generate intermediary frames. Graph-side fence
+    //    timeouts feed the same watchdog as the copy fence.
     std::vector<int> noOutSems;  // empty
     try {
         if (conf.performance)
@@ -833,9 +824,8 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
             sleepUntilNs(dueNs);
         }
 
-        // acquire next swapchain image. Bounded: with the GPU saturated no
-        // image may free up, and an unbounded wait here freezes the game's
-        // present thread. A timed-out generated frame is just dropped.
+        // bounded acquire: an unbounded wait freezes the present thread on a
+        // saturated GPU; a timed-out generated frame is dropped
         pass.acquireSemaphores.at(i) = Mini::Semaphore(info.device);
         uint32_t imageIdx{};
         auto res = Layer::ovkAcquireNextImageKHR(info.device, this->swapchain, 200'000'000ull,

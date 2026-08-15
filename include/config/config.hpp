@@ -36,8 +36,7 @@ namespace Config {
         /// presents to <config dir>/dump/ as PPM files, then stop (0 = off).
         int debugDump{0};
         /// Use the DLL's translated mipmaps shader instead of the bundled
-        /// clean-room replacement (the translated one miscompiles on mesa's
-        /// Adreno gen8 backend).
+        /// replacement (the translation miscompiles on mesa's Adreno gen8).
         bool origMipmaps{false};
 
         /// Experimental flag for overriding the synchronization method.

@@ -537,9 +537,8 @@ Device::Device(const Instance& instance, uint64_t deviceUUID) {
             VkExtent2D{1, 1}, VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT
                 | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
-        // The fallback substitutes for nullDescriptor bindings, whose reads
-        // must return zeros. Its memory is undefined at creation — some
-        // drivers hand back zero pages, others garbage.
+        // nullDescriptor semantics require reads to return zeros; the memory
+        // is undefined at creation
         Utils::clearImage(*this, *this->fallbackDescriptorImage);
     }
 }
