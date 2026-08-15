@@ -30,6 +30,33 @@ namespace LSFG_3_1 {
         const std::function<std::vector<uint8_t>(const std::string&)>& loader);
 
     ///
+    /// Initialize the LSFG library on an externally owned device (single-device
+    /// mode). All framegen work runs on the caller's device and queue, routed
+    /// through the given loader entry point; no second VkInstance/VkDevice is
+    /// created. The caller must ensure the device was created with the features
+    /// the shader chain needs (storage-image formats, read/write without
+    /// format, and shaderFloat16 or vulkanMemoryModel depending on the shader
+    /// path).
+    ///
+    /// @param gipa Loader entry point (e.g. a layer's next vkGetInstanceProcAddr).
+    /// @param externalInstance Caller-owned instance.
+    /// @param physicalDevice Physical device of the external device.
+    /// @param externalDevice Caller-owned device.
+    /// @param queueFamilyIdx Queue family of the queue below.
+    /// @param queue Queue all framegen work is submitted to.
+    /// @param isHdr Whether the images are in HDR format.
+    /// @param flowScale Internal flow scale factor.
+    /// @param generationCount Number of frames to generate.
+    /// @param loader Function to load shader source code by name.
+    ///
+    __attribute__((visibility("default")))
+    void initializeExternal(PFN_vkGetInstanceProcAddr gipa,
+        VkInstance externalInstance, VkPhysicalDevice physicalDevice,
+        VkDevice externalDevice, uint32_t queueFamilyIdx, VkQueue queue,
+        bool isHdr, float flowScale, uint64_t generationCount,
+        const std::function<std::vector<uint8_t>(const std::string&)>& loader);
+
+    ///
     /// Create a new LSFG context on a swapchain.
     ///
     /// @param in0 File descriptor for the first input image.
@@ -67,6 +94,23 @@ namespace LSFG_3_1 {
         const std::vector<AHardwareBuffer*>& outN,
         VkExtent2D extent, VkFormat format);
 #endif
+
+    ///
+    /// Single-device variant: wrap caller-owned VkImages living on the adopted
+    /// device. Only valid after initializeExternal. The caller keeps ownership
+    /// of the images and must hand them over in GENERAL layout.
+    ///
+    /// @param in0 First input image.
+    /// @param in1 Second input image.
+    /// @param outN Output images, one per generated frame.
+    /// @param extent Image dimensions.
+    /// @param format Vulkan format of all images.
+    /// @return Unique context identifier.
+    ///
+    __attribute__((visibility("default")))
+    int32_t createContextFromImages(
+        VkImage in0, VkImage in1, const std::vector<VkImage>& outN,
+        VkExtent2D extent, VkFormat format);
 
     ///
     /// Present a context.

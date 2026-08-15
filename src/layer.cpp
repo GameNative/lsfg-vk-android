@@ -32,7 +32,11 @@ namespace {
     PFN_vkGetPhysicalDeviceQueueFamilyProperties next_vkGetPhysicalDeviceQueueFamilyProperties{};
     PFN_vkGetPhysicalDeviceMemoryProperties next_vkGetPhysicalDeviceMemoryProperties{};
     PFN_vkGetPhysicalDeviceProperties next_vkGetPhysicalDeviceProperties{};
+    PFN_vkGetPhysicalDeviceFeatures next_vkGetPhysicalDeviceFeatures{};
+    PFN_vkGetPhysicalDeviceFeatures2 next_vkGetPhysicalDeviceFeatures2{};
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR next_vkGetPhysicalDeviceSurfaceCapabilitiesKHR{};
+
+    VkInstance g_instanceHandle{};
 
     PFN_vkCreateSwapchainKHR  next_vkCreateSwapchainKHR{};
     PFN_vkQueuePresentKHR     next_vkQueuePresentKHR{};
@@ -59,9 +63,21 @@ namespace {
 #endif
     PFN_vkGetDeviceQueue next_vkGetDeviceQueue{};
     PFN_vkQueueSubmit next_vkQueueSubmit{};
+    PFN_vkCreateFence next_vkCreateFence{};
+    PFN_vkDestroyFence next_vkDestroyFence{};
+    PFN_vkWaitForFences next_vkWaitForFences{};
+    PFN_vkResetFences next_vkResetFences{};
     PFN_vkCmdPipelineBarrier next_vkCmdPipelineBarrier{};
     PFN_vkCmdBlitImage next_vkCmdBlitImage{};
     PFN_vkAcquireNextImageKHR next_vkAcquireNextImageKHR{};
+    PFN_vkCreateBuffer next_vkCreateBuffer{};
+    PFN_vkDestroyBuffer next_vkDestroyBuffer{};
+    PFN_vkGetBufferMemoryRequirements next_vkGetBufferMemoryRequirements{};
+    PFN_vkBindBufferMemory next_vkBindBufferMemory{};
+    PFN_vkMapMemory next_vkMapMemory{};
+    PFN_vkUnmapMemory next_vkUnmapMemory{};
+    PFN_vkInvalidateMappedMemoryRanges next_vkInvalidateMappedMemoryRanges{};
+    PFN_vkCmdCopyImageToBuffer next_vkCmdCopyImageToBuffer{};
 
     template<typename T>
     bool initInstanceFunc(VkInstance instance, const char* name, T* func) {
@@ -145,6 +161,13 @@ namespace {
             if (!success)
                 throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED,
                     "Failed to get instance function pointers");
+            // optional (core 1.0/1.1): used to merge framegen's required
+            // features into the game's device creation
+            initInstanceFunc(*pInstance,
+                "vkGetPhysicalDeviceFeatures", &next_vkGetPhysicalDeviceFeatures);
+            initInstanceFunc(*pInstance,
+                "vkGetPhysicalDeviceFeatures2", &next_vkGetPhysicalDeviceFeatures2);
+            g_instanceHandle = *pInstance;
 
             std::cerr << "lsfg-vk: Vulkan instance layer initialized successfully.\n";
         } catch (const std::exception& e) {
@@ -235,9 +258,21 @@ namespace {
 #endif
             success &= initDeviceFunc(*pDevice, "vkGetDeviceQueue", &next_vkGetDeviceQueue);
             success &= initDeviceFunc(*pDevice, "vkQueueSubmit", &next_vkQueueSubmit);
+            success &= initDeviceFunc(*pDevice, "vkCreateFence", &next_vkCreateFence);
+            success &= initDeviceFunc(*pDevice, "vkDestroyFence", &next_vkDestroyFence);
+            success &= initDeviceFunc(*pDevice, "vkWaitForFences", &next_vkWaitForFences);
+            success &= initDeviceFunc(*pDevice, "vkResetFences", &next_vkResetFences);
             success &= initDeviceFunc(*pDevice, "vkCmdPipelineBarrier", &next_vkCmdPipelineBarrier);
             success &= initDeviceFunc(*pDevice, "vkCmdBlitImage", &next_vkCmdBlitImage);
             success &= initDeviceFunc(*pDevice, "vkAcquireNextImageKHR", &next_vkAcquireNextImageKHR);
+            success &= initDeviceFunc(*pDevice, "vkCreateBuffer", &next_vkCreateBuffer);
+            success &= initDeviceFunc(*pDevice, "vkDestroyBuffer", &next_vkDestroyBuffer);
+            success &= initDeviceFunc(*pDevice, "vkGetBufferMemoryRequirements", &next_vkGetBufferMemoryRequirements);
+            success &= initDeviceFunc(*pDevice, "vkBindBufferMemory", &next_vkBindBufferMemory);
+            success &= initDeviceFunc(*pDevice, "vkMapMemory", &next_vkMapMemory);
+            success &= initDeviceFunc(*pDevice, "vkUnmapMemory", &next_vkUnmapMemory);
+            success &= initDeviceFunc(*pDevice, "vkInvalidateMappedMemoryRanges", &next_vkInvalidateMappedMemoryRanges);
+            success &= initDeviceFunc(*pDevice, "vkCmdCopyImageToBuffer", &next_vkCmdCopyImageToBuffer);
             if (!success)
                 throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED,
                     "Failed to get device function pointers");
@@ -352,6 +387,23 @@ namespace Layer {
             VkPhysicalDevice physicalDevice,
             VkPhysicalDeviceProperties* pProperties) {
         next_vkGetPhysicalDeviceProperties(physicalDevice, pProperties);
+    }
+    bool ovkGetPhysicalDeviceFeatures(
+            VkPhysicalDevice physicalDevice,
+            VkPhysicalDeviceFeatures* pFeatures) {
+        if (!next_vkGetPhysicalDeviceFeatures) return false;
+        next_vkGetPhysicalDeviceFeatures(physicalDevice, pFeatures);
+        return true;
+    }
+    bool ovkGetPhysicalDeviceFeatures2(
+            VkPhysicalDevice physicalDevice,
+            VkPhysicalDeviceFeatures2* pFeatures) {
+        if (!next_vkGetPhysicalDeviceFeatures2) return false;
+        next_vkGetPhysicalDeviceFeatures2(physicalDevice, pFeatures);
+        return true;
+    }
+    VkInstance ovkInstance() {
+        return g_instanceHandle;
     }
     VkResult ovkGetPhysicalDeviceSurfaceCapabilitiesKHR(
             VkPhysicalDevice physicalDevice,
@@ -518,6 +570,34 @@ namespace Layer {
         return next_vkQueueSubmit(queue, submitCount, pSubmits, fence);
     }
 
+    VkResult ovkCreateFence(
+            VkDevice device,
+            const VkFenceCreateInfo* pCreateInfo,
+            const VkAllocationCallbacks* pAllocator,
+            VkFence* pFence) {
+        return next_vkCreateFence(device, pCreateInfo, pAllocator, pFence);
+    }
+    void ovkDestroyFence(
+            VkDevice device,
+            VkFence fence,
+            const VkAllocationCallbacks* pAllocator) {
+        next_vkDestroyFence(device, fence, pAllocator);
+    }
+    VkResult ovkWaitForFences(
+            VkDevice device,
+            uint32_t fenceCount,
+            const VkFence* pFences,
+            VkBool32 waitAll,
+            uint64_t timeout) {
+        return next_vkWaitForFences(device, fenceCount, pFences, waitAll, timeout);
+    }
+    VkResult ovkResetFences(
+            VkDevice device,
+            uint32_t fenceCount,
+            const VkFence* pFences) {
+        return next_vkResetFences(device, fenceCount, pFences);
+    }
+
     void ovkCmdPipelineBarrier(
             VkCommandBuffer commandBuffer,
             VkPipelineStageFlags srcStageMask,
@@ -554,5 +634,61 @@ namespace Layer {
             VkFence fence,
             uint32_t* pImageIndex) {
         return next_vkAcquireNextImageKHR(device, swapchain, timeout, semaphore, fence, pImageIndex);
+    }
+
+    VkResult ovkCreateBuffer(
+            VkDevice device,
+            const VkBufferCreateInfo* pCreateInfo,
+            const VkAllocationCallbacks* pAllocator,
+            VkBuffer* pBuffer) {
+        return next_vkCreateBuffer(device, pCreateInfo, pAllocator, pBuffer);
+    }
+    void ovkDestroyBuffer(
+            VkDevice device,
+            VkBuffer buffer,
+            const VkAllocationCallbacks* pAllocator) {
+        next_vkDestroyBuffer(device, buffer, pAllocator);
+    }
+    void ovkGetBufferMemoryRequirements(
+            VkDevice device,
+            VkBuffer buffer,
+            VkMemoryRequirements* pMemoryRequirements) {
+        next_vkGetBufferMemoryRequirements(device, buffer, pMemoryRequirements);
+    }
+    VkResult ovkBindBufferMemory(
+            VkDevice device,
+            VkBuffer buffer,
+            VkDeviceMemory memory,
+            VkDeviceSize memoryOffset) {
+        return next_vkBindBufferMemory(device, buffer, memory, memoryOffset);
+    }
+    VkResult ovkMapMemory(
+            VkDevice device,
+            VkDeviceMemory memory,
+            VkDeviceSize offset,
+            VkDeviceSize size,
+            VkMemoryMapFlags flags,
+            void** ppData) {
+        return next_vkMapMemory(device, memory, offset, size, flags, ppData);
+    }
+    void ovkUnmapMemory(
+            VkDevice device,
+            VkDeviceMemory memory) {
+        next_vkUnmapMemory(device, memory);
+    }
+    VkResult ovkInvalidateMappedMemoryRanges(
+            VkDevice device,
+            uint32_t memoryRangeCount,
+            const VkMappedMemoryRange* pMemoryRanges) {
+        return next_vkInvalidateMappedMemoryRanges(device, memoryRangeCount, pMemoryRanges);
+    }
+    void ovkCmdCopyImageToBuffer(
+            VkCommandBuffer commandBuffer,
+            VkImage srcImage,
+            VkImageLayout srcImageLayout,
+            VkBuffer dstBuffer,
+            uint32_t regionCount,
+            const VkBufferImageCopy* pRegions) {
+        next_vkCmdCopyImageToBuffer(commandBuffer, srcImage, srcImageLayout, dstBuffer, regionCount, pRegions);
     }
 }

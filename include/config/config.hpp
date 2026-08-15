@@ -24,6 +24,20 @@ namespace Config {
         bool performance{false};
         /// Whether HDR is enabled
         bool hdr{false};
+        /// Base frame-rate cap applied to real game frames (0 = uncapped).
+        /// The on-screen rate becomes fpsLimit * multiplier.
+        int fpsLimit{0};
+        /// Debug: 1 = present the previous-frame input image in generated
+        /// slots instead of framegen output (isolates input vs graph
+        /// corruption); 2 = present the real swapchain image itself (isolates
+        /// the swapchain read from the format-converting copy).
+        int debugInputs{0};
+        /// Debug: dump frame_0/frame_1/out_n pixels for this many consecutive
+        /// presents to <config dir>/dump/ as PPM files, then stop (0 = off).
+        int debugDump{0};
+        /// Use the DLL's translated mipmaps shader instead of the bundled
+        /// replacement (the translation miscompiles on mesa's Adreno gen8).
+        bool origMipmaps{false};
 
         /// Experimental flag for overriding the synchronization method.
         VkPresentModeKHR e_present;

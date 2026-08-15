@@ -75,6 +75,70 @@ namespace {
         VkDeviceCreateInfo createInfo = *pCreateInfo;
         createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         createInfo.ppEnabledExtensionNames = extensions.data();
+
+        // Single-device framegen runs the LSFG compute chain on THIS device,
+        // so its required features must be enabled here. Merge them into
+        // whatever feature structure the game supplied, gated on physical
+        // support. NOLINTBEGIN
+        VkPhysicalDeviceFeatures supported{};
+        VkPhysicalDeviceFeatures mergedFeatures{};
+        VkPhysicalDeviceVulkan12Features vk12Supported{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+        VkPhysicalDeviceFeatures2 supported2{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &vk12Supported };
+        VkPhysicalDeviceVulkan12Features extraVk12{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+        if (Layer::ovkGetPhysicalDeviceFeatures(physicalDevice, &supported)) {
+            Layer::ovkGetPhysicalDeviceFeatures2(physicalDevice, &supported2);
+
+            auto mergeCore = [&](VkPhysicalDeviceFeatures* target) {
+                target->shaderStorageImageExtendedFormats |= supported.shaderStorageImageExtendedFormats;
+                target->shaderStorageImageReadWithoutFormat |= supported.shaderStorageImageReadWithoutFormat;
+                target->shaderStorageImageWriteWithoutFormat |= supported.shaderStorageImageWriteWithoutFormat;
+                target->shaderInt16 |= supported.shaderInt16;
+            };
+
+            VkPhysicalDeviceFeatures2* features2InChain = nullptr;
+            VkPhysicalDeviceVulkan12Features* vk12InChain = nullptr;
+            for (auto* node = const_cast<VkBaseOutStructure*>(
+                        reinterpret_cast<const VkBaseOutStructure*>(createInfo.pNext));
+                    node != nullptr; node = node->pNext) {
+                if (node->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
+                    features2InChain = reinterpret_cast<VkPhysicalDeviceFeatures2*>(node);
+                else if (node->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES)
+                    vk12InChain = reinterpret_cast<VkPhysicalDeviceVulkan12Features*>(node);
+            }
+
+            if (features2InChain != nullptr) {
+                mergeCore(&features2InChain->features);
+            } else if (createInfo.pEnabledFeatures != nullptr) {
+                mergedFeatures = *createInfo.pEnabledFeatures;
+                mergeCore(&mergedFeatures);
+                createInfo.pEnabledFeatures = &mergedFeatures;
+            } else {
+                mergeCore(&mergedFeatures);
+                createInfo.pEnabledFeatures = &mergedFeatures;
+            }
+
+            // fp16 shaders and the DXBC path's memory-model requirement live in
+            // the 1.2 feature struct. Merge into the game's struct when it has
+            // one; otherwise append ours (valid on 1.2+ devices, which every
+            // supported ICD here is).
+            if (vk12InChain != nullptr) {
+                vk12InChain->shaderFloat16 |= vk12Supported.shaderFloat16;
+                vk12InChain->vulkanMemoryModel |= vk12Supported.vulkanMemoryModel;
+                vk12InChain->vulkanMemoryModelDeviceScope |= vk12Supported.vulkanMemoryModelDeviceScope;
+            } else if (vk12Supported.shaderFloat16 || vk12Supported.vulkanMemoryModel) {
+                extraVk12.shaderFloat16 = vk12Supported.shaderFloat16;
+                extraVk12.vulkanMemoryModel = vk12Supported.vulkanMemoryModel;
+                extraVk12.vulkanMemoryModelDeviceScope = vk12Supported.vulkanMemoryModelDeviceScope;
+                extraVk12.pNext = const_cast<void*>(createInfo.pNext);
+                createInfo.pNext = &extraVk12;
+            }
+        }
+        // NOLINTEND
+
         auto res = Layer::ovkCreateDevice(physicalDevice, &createInfo, pAllocator, pDevice);
         if (res == VK_ERROR_EXTENSION_NOT_PRESENT)
             throw std::runtime_error(
@@ -266,8 +330,36 @@ namespace {
                             !std::filesystem::exists(conf.config_file)
                           || conf.timestamp != std::filesystem::last_write_time(conf.config_file)
                     )) {
-                Layer::ovkQueuePresentKHR(queue, pPresentInfo);
-                return VK_ERROR_OUT_OF_DATE_KHR;
+                // A change to fps_limit or the debug keys is applied in place,
+                // without tearing down the swapchain. Anything else forces a
+                // recreation so LsContext picks it up in its constructor.
+                bool pacingOnly = false;
+                if (std::filesystem::exists(conf.config_file)) {
+                    try {
+                        Config::updateConfig(conf.config_file);
+                        auto fresh = Config::getConfig(Utils::getProcessName());
+                        if (fresh.enable == conf.enable
+                                && fresh.dll == conf.dll
+                                && fresh.multiplier == conf.multiplier
+                                && fresh.flowScale == conf.flowScale
+                                && fresh.performance == conf.performance
+                                && fresh.hdr == conf.hdr
+                                && fresh.origMipmaps == conf.origMipmaps
+                                && fresh.e_present == conf.e_present) {
+                            conf.fpsLimit = fresh.fpsLimit;
+                            conf.debugInputs = fresh.debugInputs;
+                            conf.debugDump = fresh.debugDump;
+                            conf.timestamp = fresh.timestamp;
+                            pacingOnly = true;
+                        }
+                    } catch (const std::exception&) {
+                        // fall through to the recreation path
+                    }
+                }
+                if (!pacingOnly) {
+                    Layer::ovkQueuePresentKHR(queue, pPresentInfo);
+                    return VK_ERROR_OUT_OF_DATE_KHR;
+                }
             }
 
             // ensure present mode is still valid
@@ -276,9 +368,13 @@ namespace {
                 return VK_ERROR_OUT_OF_DATE_KHR;
             }
 
-            // skip if disabled
+            // no framegen at multiplier <= 1, but the fps cap still applies
             if (conf.multiplier <= 1)
-                return Layer::ovkQueuePresentKHR(queue, pPresentInfo);
+                return swapchain.presentPassthrough(queue, pPresentInfo);
+
+            // skip if framegen force-disabled itself after repeated sync failures
+            if (swapchain.isDisabled())
+                return swapchain.presentPassthrough(queue, pPresentInfo);
 
             // present the swapchain
             std::vector<VkSemaphore> semaphores(pPresentInfo->waitSemaphoreCount);

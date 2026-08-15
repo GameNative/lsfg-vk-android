@@ -12,3 +12,4 @@
 /.ccls
 
 build-android/
+/build-android-*

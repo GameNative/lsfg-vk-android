@@ -131,10 +131,11 @@ void Context::present(Vulkan& vk,
         int inSem, const std::vector<int>& outSem) {
     auto& data = this->data.at(this->frameIdx % 8);
 
-    // 3. wait for completion of previous frame in this slot
+    // 3. wait for completion of previous frame in this slot; bounded, and
+    // thrown before any per-frame state changes so the caller can retry
     if (data.shouldWait)
         for (auto& fence : data.completionFences)
-            if (!fence.wait(vk.device, UINT64_MAX))
+            if (!fence.wait(vk.device, 2'000'000'000ull))
                 throw LSFG::vulkan_error(VK_TIMEOUT, "Fence wait timed out");
     data.shouldWait = true;
 
@@ -286,3 +287,48 @@ Context::Context(Vulkan& vk,
 }
 
 #endif // __ANDROID__
+
+Context::Context(Vulkan& vk,
+        VkImage in0, VkImage in1, const std::vector<VkImage>& outN,
+        VkExtent2D extent, VkFormat format) {
+    this->inImg_0 = Core::Image(vk.device, in0, extent, format, VK_IMAGE_ASPECT_COLOR_BIT);
+    this->inImg_1 = Core::Image(vk.device, in1, extent, format, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    std::vector<Core::Image> outImgs;
+    outImgs.reserve(outN.size());
+    for (auto* img : outN)
+        outImgs.emplace_back(vk.device, img, extent, format, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    for (size_t i = 0; i < 8; i++) {
+        auto& data = this->data.at(i);
+        data.internalSemaphores.resize(vk.generationCount);
+        data.outSemaphores.resize(vk.generationCount);
+        data.completionFences.resize(vk.generationCount);
+        data.cmdBuffers2.resize(vk.generationCount);
+    }
+
+    this->mipmaps = Shaders::Mipmaps(vk, this->inImg_0, this->inImg_1);
+    for (size_t i = 0; i < 7; i++)
+        this->alpha.at(i) = Shaders::Alpha(vk, this->mipmaps.getOutImages().at(i));
+    this->beta = Shaders::Beta(vk, this->alpha.at(0).getOutImages());
+    for (size_t i = 0; i < 7; i++) {
+        this->gamma.at(i) = Shaders::Gamma(vk,
+            this->alpha.at(6 - i).getOutImages(),
+            this->beta.getOutImages().at(std::min<size_t>(6 - i, 5)),
+            (i == 0) ? std::nullopt : std::make_optional(this->gamma.at(i - 1).getOutImage()));
+        if (i < 4) continue;
+
+        this->delta.at(i - 4) = Shaders::Delta(vk,
+            this->alpha.at(6 - i).getOutImages(),
+            this->beta.getOutImages().at(6 - i),
+            (i == 4) ? std::nullopt : std::make_optional(this->gamma.at(i - 1).getOutImage()),
+            (i == 4) ? std::nullopt : std::make_optional(this->delta.at(i - 5).getOutImage1()),
+            (i == 4) ? std::nullopt : std::make_optional(this->delta.at(i - 5).getOutImage2()));
+    }
+    this->generate = Shaders::Generate(vk,
+        this->inImg_0, this->inImg_1,
+        this->gamma.at(6).getOutImage(),
+        this->delta.at(2).getOutImage1(),
+        this->delta.at(2).getOutImage2(),
+        std::move(outImgs));
+}

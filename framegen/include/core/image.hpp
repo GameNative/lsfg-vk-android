@@ -77,6 +77,23 @@ namespace LSFG::Core {
             AHardwareBuffer* ahb);
 #endif
 
+        ///
+        /// Wrap a caller-owned VkImage living on the same device (single-device
+        /// mode). No memory is allocated or imported; only a view is created.
+        /// The caller must keep the image alive and hand it over in GENERAL
+        /// layout between presents.
+        ///
+        /// @param device Vulkan device the image belongs to.
+        /// @param externalImage Caller-owned image handle.
+        /// @param extent Extent of the image in pixels.
+        /// @param format Vulkan format of the image
+        /// @param aspectFlags Aspect flags for the image view
+        ///
+        /// @throws LSFG::vulkan_error if view creation fails.
+        ///
+        Image(const Core::Device& device, VkImage externalImage,
+            VkExtent2D extent, VkFormat format, VkImageAspectFlags aspectFlags);
+
         /// Get the Vulkan handle.
         [[nodiscard]] auto handle() const { return *this->image; }
         /// Get the Vulkan device memory handle.

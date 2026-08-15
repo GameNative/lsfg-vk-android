@@ -26,6 +26,7 @@ namespace {
     std::optional<Core::Instance> instance;
     std::optional<Vulkan> device;
     std::unordered_map<int32_t, Context> contexts;
+    bool externalMode = false;
 }
 
 void LSFG_3_1::initialize(uint64_t deviceUUID,
@@ -37,6 +38,33 @@ void LSFG_3_1::initialize(uint64_t deviceUUID,
     instance.emplace();
     device.emplace(Vulkan {
         .device{*instance, deviceUUID},
+        .generationCount = generationCount,
+        .flowScale = flowScale,
+        .isHdr = isHdr
+    });
+    contexts = std::unordered_map<int32_t, Context>();
+
+    device->commandPool = Core::CommandPool(device->device);
+    device->descriptorPool = Core::DescriptorPool(device->device);
+
+    device->resources = Pool::ResourcePool(device->isHdr, device->flowScale);
+    device->shaders = Pool::ShaderPool(loader);
+
+    std::srand(static_cast<uint32_t>(std::time(nullptr)));
+}
+
+void LSFG_3_1::initializeExternal(PFN_vkGetInstanceProcAddr gipa,
+        VkInstance externalInstance, VkPhysicalDevice physicalDevice,
+        VkDevice externalDevice, uint32_t queueFamilyIdx, VkQueue queue,
+        bool isHdr, float flowScale, uint64_t generationCount,
+        const std::function<std::vector<uint8_t>(const std::string&)>& loader) {
+    if (instance.has_value() || device.has_value())
+        return;
+
+    externalMode = true;
+    instance.emplace(gipa, externalInstance);
+    device.emplace(Vulkan {
+        .device{*instance, physicalDevice, externalDevice, queueFamilyIdx, queue},
         .generationCount = generationCount,
         .flowScale = flowScale,
         .isHdr = isHdr
@@ -114,9 +142,23 @@ int32_t LSFG_3_1::createContextFromAHB(
 
 #endif // __ANDROID__
 
+int32_t LSFG_3_1::createContextFromImages(
+        VkImage in0, VkImage in1, const std::vector<VkImage>& outN,
+        VkExtent2D extent, VkFormat format) {
+    if (!instance.has_value() || !device.has_value())
+        throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED, "LSFG not initialized");
+
+    const int32_t id = std::rand();
+    contexts.emplace(id, Context(*device, in0, in1, outN, extent, format));
+    return id;
+}
+
 #ifdef __ANDROID__
 void LSFG_3_1::waitIdle() {
     if (!device.has_value()) return;
+    // single-device mode: work is ordered on the caller's queue; idling the
+    // caller's whole device here would stall the game for no benefit
+    if (externalMode) return;
     vkDeviceWaitIdle(device->device.handle());
 }
 #endif

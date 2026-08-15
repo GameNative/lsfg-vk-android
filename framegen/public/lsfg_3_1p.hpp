@@ -30,6 +30,18 @@ namespace LSFG_3_1P {
         const std::function<std::vector<uint8_t>(const std::string&)>& loader);
 
     ///
+    /// Initialize the LSFG library on an externally owned device (single-device
+    /// mode). All framegen work runs on the caller's device and queue; no
+    /// second VkInstance/VkDevice is created. See LSFG_3_1::initializeExternal.
+    ///
+    __attribute__((visibility("default")))
+    void initializeExternal(PFN_vkGetInstanceProcAddr gipa,
+        VkInstance externalInstance, VkPhysicalDevice physicalDevice,
+        VkDevice externalDevice, uint32_t queueFamilyIdx, VkQueue queue,
+        bool isHdr, float flowScale, uint64_t generationCount,
+        const std::function<std::vector<uint8_t>(const std::string&)>& loader);
+
+    ///
     /// Create a new LSFG context on a swapchain.
     ///
     /// @param in0 File descriptor for the first input image.
@@ -54,6 +66,13 @@ namespace LSFG_3_1P {
         const std::vector<AHardwareBuffer*>& outN,
         VkExtent2D extent, VkFormat format);
 #endif
+
+    /// Single-device variant: wrap caller-owned VkImages living on the adopted
+    /// device. Only valid after initializeExternal.
+    __attribute__((visibility("default")))
+    int32_t createContextFromImages(
+        VkImage in0, VkImage in1, const std::vector<VkImage>& outN,
+        VkExtent2D extent, VkFormat format);
 
     ///
     /// Present a context.
@@ -85,6 +104,23 @@ namespace LSFG_3_1P {
     /// Block until framegen's internal Vulkan device is idle. See LSFG_3_1::waitIdle.
     __attribute__((visibility("default")))
     void waitIdle();
+
+    /// Debug handle to an internal image of the framegen graph.
+    struct DebugImage {
+        const char* name;
+        VkImage image;
+        VkExtent2D extent;
+        VkFormat format;
+    };
+
+    ///
+    /// Get handles to key internal images (flow chain) for pixel dumping.
+    /// The images live on the graph's device in GENERAL layout.
+    ///
+    /// @param id Unique identifier of the context.
+    ///
+    __attribute__((visibility("default")))
+    std::vector<DebugImage> debugInternalImages(int32_t id);
 #endif
 
 }

@@ -74,6 +74,7 @@ void Config::updateConfig(const std::string& file) {
     const toml::value globalTable = toml::find_or_default<toml::table>(toml, "global");
     const Configuration global{
         .dll =   toml::find_or(globalTable, "dll", std::string()),
+        .fpsLimit = toml::find_or(globalTable, "fps_limit", 0),
         .config_file = file,
         .timestamp = std::filesystem::last_write_time(file)
     };
@@ -101,6 +102,10 @@ void Config::updateConfig(const std::string& file) {
             .flowScale = toml::find_or(gameTable, "flow_scale", 1.0F),
             .performance = toml::find_or(gameTable, "performance_mode", false),
             .hdr = toml::find_or(gameTable, "hdr_mode", false),
+            .fpsLimit = toml::find_or(gameTable, "fps_limit", global.fpsLimit),
+            .debugInputs = toml::find_or(gameTable, "debug_inputs", 0),
+            .debugDump = toml::find_or(gameTable, "debug_dump", 0),
+            .origMipmaps = toml::find_or(gameTable, "orig_mipmaps", false),
             .e_present =   into_present(toml::find_or(gameTable, "experimental_present_mode", "")),
             .config_file = file,
             .timestamp = global.timestamp
@@ -111,6 +116,8 @@ void Config::updateConfig(const std::string& file) {
             throw std::runtime_error("Multiplier cannot be less than 1");
         if (game.flowScale < 0.25F || game.flowScale > 1.0F)
             throw std::runtime_error("Flow scale must be between 0.25 and 1.0");
+        if (game.fpsLimit < 0)
+            game.fpsLimit = 0;
         games[exe] = std::move(game);
     }
 

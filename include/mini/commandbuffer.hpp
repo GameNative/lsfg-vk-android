@@ -64,13 +64,15 @@ namespace Mini {
         /// @param queue Vulkan queue to submit to
         /// @param waitSemaphores Semaphores to wait on before executing the command buffer
         /// @param signalSemaphores Semaphores to signal after executing the command buffer
+        /// @param fence Optional fence to signal once execution completes
         ///
         /// @throws std::logic_error if the command buffer is not in Full state.
         /// @throws LSFG::vulkan_error if submission fails.
         ///
         void submit(VkQueue queue,
             const std::vector<VkSemaphore>& waitSemaphores = {},
-            const std::vector<VkSemaphore>& signalSemaphores = {});
+            const std::vector<VkSemaphore>& signalSemaphores = {},
+            VkFence fence = VK_NULL_HANDLE);
 
         /// Get the state of the command buffer.
         [[nodiscard]] CommandBufferState getState() const { return *this->state; }

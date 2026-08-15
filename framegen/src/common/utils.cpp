@@ -321,6 +321,29 @@ void Utils::clearImage(const Core::Device& device, Core::Image& image, bool whit
         &clearColor,
         1, &subresourceRange);
 
+    const VkImageMemoryBarrier2 toGeneral{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        .srcAccessMask = VK_ACCESS_2_TRANSFER_WRITE_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        .dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT,
+        .oldLayout = image.getLayout(),
+        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .image = image.handle(),
+        .subresourceRange = {
+            .aspectMask = image.getAspectFlags(),
+            .levelCount = 1,
+            .layerCount = 1
+        }
+    };
+    const VkDependencyInfo toGeneralDep = {
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+        .imageMemoryBarrierCount = 1,
+        .pImageMemoryBarriers = &toGeneral
+    };
+    image.setLayout(VK_IMAGE_LAYOUT_GENERAL);
+    Utils::cmdPipelineBarrier2(cmdBuf.handle(), &toGeneralDep);
+
     cmdBuf.end();
 
     cmdBuf.submit(device.getComputeQueue(), fence);

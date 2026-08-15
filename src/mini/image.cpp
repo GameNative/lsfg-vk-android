@@ -116,6 +116,82 @@ Image::Image(VkDevice device, VkPhysicalDevice physicalDevice,
     );
 }
 
+Image Image::createDeviceLocal(VkDevice device, VkPhysicalDevice physicalDevice,
+        VkExtent2D extent, VkFormat format,
+        VkImageUsageFlags usage, VkImageAspectFlags aspectFlags) {
+    Image img;
+    img.extent = extent;
+    img.format = format;
+    img.aspectFlags = aspectFlags;
+
+    const VkImageCreateInfo desc{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = format,
+        .extent = { extent.width, extent.height, 1 },
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    VkImage imageHandle{};
+    auto res = Layer::ovkCreateImage(device, &desc, nullptr, &imageHandle);
+    if (res != VK_SUCCESS || imageHandle == VK_NULL_HANDLE)
+        throw LSFG::vulkan_error(res, "Failed to create device-local image");
+
+    VkMemoryRequirements memReqs;
+    Layer::ovkGetImageMemoryRequirements(device, imageHandle, &memReqs);
+
+    VkPhysicalDeviceMemoryProperties memProps;
+    Layer::ovkGetPhysicalDeviceMemoryProperties(physicalDevice, &memProps);
+
+    uint32_t typeIndex = UINT32_MAX;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
+        if ((memReqs.memoryTypeBits & (1u << i)) &&
+            (memProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+            typeIndex = i;
+            break;
+        }
+    }
+    if (typeIndex == UINT32_MAX) {
+        for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i) {
+            if (memReqs.memoryTypeBits & (1u << i)) {
+                typeIndex = i;
+                break;
+            }
+        }
+    }
+    if (typeIndex == UINT32_MAX)
+        throw LSFG::vulkan_error(VK_ERROR_UNKNOWN, "No memory type for device-local image");
+
+    const VkMemoryAllocateInfo allocInfo{
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memReqs.size,
+        .memoryTypeIndex = typeIndex,
+    };
+    VkDeviceMemory memoryHandle{};
+    res = Layer::ovkAllocateMemory(device, &allocInfo, nullptr, &memoryHandle);
+    if (res != VK_SUCCESS || memoryHandle == VK_NULL_HANDLE)
+        throw LSFG::vulkan_error(res, "Failed to allocate device-local image memory");
+
+    res = Layer::ovkBindImageMemory(device, imageHandle, memoryHandle, 0);
+    if (res != VK_SUCCESS)
+        throw LSFG::vulkan_error(res, "Failed to bind device-local image memory");
+
+    img.image = std::shared_ptr<VkImage>(
+        new VkImage(imageHandle),
+        [dev = device](VkImage* i) { Layer::ovkDestroyImage(dev, *i, nullptr); }
+    );
+    img.memory = std::shared_ptr<VkDeviceMemory>(
+        new VkDeviceMemory(memoryHandle),
+        [dev = device](VkDeviceMemory* mem) { Layer::ovkFreeMemory(dev, *mem, nullptr); }
+    );
+    return img;
+}
+
 #ifdef __ANDROID__
 Image::Image(VkDevice device, VkPhysicalDevice physicalDevice,
         VkExtent2D extent, VkFormat format,
@@ -138,8 +214,7 @@ Image::Image(VkDevice device, VkPhysicalDevice physicalDevice,
         .layers = 1,
         .format = ahbFormat,
         .usage = AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE
-               | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT
-               | AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN,
+               | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT,
         .stride = 0,
         .rfu0 = 0,
         .rfu1 = 0,

@@ -1,0 +1,54 @@
+// Clean-room replacement for the LSFG mipmaps pass (written from the pass
+// interface only: sample the input frame, write a 7-level R8 luma pyramid).
+// Ships because mesa's Adreno gen8 backend miscompiles the DLL-translated
+// original (writes stop landing after startup). Each level averages 4
+// bilinear taps spread over the destination texel's source footprint.
+// Rebuild: glslangValidator -V --target-env vulkan1.3 -e main
+//   shaders/mipmaps_replacement.comp -o mipmaps_replacement.spv
+#version 450
+layout(local_size_x = 32, local_size_y = 32) in;
+layout(set = 0, binding = 0) uniform U { vec4 u; };
+layout(set = 0, binding = 1) uniform sampler s;
+layout(set = 0, binding = 2) uniform texture2D tex;
+layout(set = 0, binding = 3, r8) writeonly uniform image2D o0;
+layout(set = 0, binding = 4, r8) writeonly uniform image2D o1;
+layout(set = 0, binding = 5, r8) writeonly uniform image2D o2;
+layout(set = 0, binding = 6, r8) writeonly uniform image2D o3;
+layout(set = 0, binding = 7, r8) writeonly uniform image2D o4;
+layout(set = 0, binding = 8, r8) writeonly uniform image2D o5;
+layout(set = 0, binding = 9, r8) writeonly uniform image2D o6;
+
+float lumaBox(vec2 c, vec2 e) {
+    const vec3 W = vec3(0.299, 0.587, 0.114);
+    float l = 0.0;
+    l += dot(textureLod(sampler2D(tex, s), c + e * vec2(-0.25, -0.25), 0.0).rgb, W);
+    l += dot(textureLod(sampler2D(tex, s), c + e * vec2( 0.25, -0.25), 0.0).rgb, W);
+    l += dot(textureLod(sampler2D(tex, s), c + e * vec2(-0.25,  0.25), 0.0).rgb, W);
+    l += dot(textureLod(sampler2D(tex, s), c + e * vec2( 0.25,  0.25), 0.0).rgb, W);
+    return l * 0.25;
+}
+
+#define WRITE_LEVEL(img, q) { \
+    ivec2 sz = imageSize(img); \
+    ivec2 pp = (q); \
+    if (pp.x < sz.x && pp.y < sz.y) { \
+        vec2 e = 1.0 / vec2(sz); \
+        vec2 c = (vec2(pp) + 0.5) * e; \
+        imageStore(img, pp, vec4(lumaBox(c, e))); \
+    } \
+}
+
+void main() {
+    ivec2 gid = ivec2(gl_GlobalInvocationID.xy);
+    for (int dy = 0; dy < 2; dy++)
+    for (int dx = 0; dx < 2; dx++) {
+        ivec2 p = gid * 2 + ivec2(dx, dy);
+        WRITE_LEVEL(o0, p)
+        if ((p.x & 1) == 0 && (p.y & 1) == 0) WRITE_LEVEL(o1, p >> 1)
+        if ((p.x & 3) == 0 && (p.y & 3) == 0) WRITE_LEVEL(o2, p >> 2)
+        if ((p.x & 7) == 0 && (p.y & 7) == 0) WRITE_LEVEL(o3, p >> 3)
+        if ((p.x & 15) == 0 && (p.y & 15) == 0) WRITE_LEVEL(o4, p >> 4)
+        if ((p.x & 31) == 0 && (p.y & 31) == 0) WRITE_LEVEL(o5, p >> 5)
+        if ((p.x & 63) == 0 && (p.y & 63) == 0) WRITE_LEVEL(o6, p >> 6)
+    }
+}

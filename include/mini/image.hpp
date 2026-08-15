@@ -57,6 +57,17 @@ namespace Mini {
         [[nodiscard]] AHardwareBuffer* getAhb() const { return this->ahb; }
 #endif
 
+        ///
+        /// Create a plain device-local image with no external memory
+        /// (single-device framegen path: the image is shared with the framegen
+        /// chain by handle, on the same device).
+        ///
+        /// @throws LSFG::vulkan_error if object creation fails.
+        ///
+        static Image createDeviceLocal(VkDevice device, VkPhysicalDevice physicalDevice,
+            VkExtent2D extent, VkFormat format,
+            VkImageUsageFlags usage, VkImageAspectFlags aspectFlags);
+
         /// Get the Vulkan handle.
         [[nodiscard]] auto handle() const { return *this->image; }
         /// Get the Vulkan device memory handle.

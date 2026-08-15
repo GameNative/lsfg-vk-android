@@ -47,3 +47,14 @@ Instance::Instance() {
         }
     );
 }
+
+Instance::Instance(PFN_vkGetInstanceProcAddr gipa, VkInstance external) {
+    volkInitializeCustom(gipa);
+    volkLoadInstance(external);
+
+    // non-owning: the caller controls the instance lifetime
+    this->instance = std::shared_ptr<VkInstance>(
+        new VkInstance(external),
+        [](VkInstance* instance) { delete instance; }
+    );
+}

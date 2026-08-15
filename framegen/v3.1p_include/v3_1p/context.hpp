@@ -51,6 +51,11 @@ namespace LSFG_3_1P {
             VkExtent2D extent, VkFormat format);
 #endif
 
+        /// Single-device variant wrapping caller-owned VkImages.
+        Context(Vulkan& vk,
+            VkImage in0, VkImage in1, const std::vector<VkImage>& outN,
+            VkExtent2D extent, VkFormat format);
+
         ///
         /// Present on the context.
         ///
@@ -61,6 +66,12 @@ namespace LSFG_3_1P {
         ///
         void present(Vulkan& vk,
             int inSem, const std::vector<int>& outSem);
+
+#ifdef __ANDROID__
+        /// Key internal images of the flow chain, for pixel dumping.
+        [[nodiscard]] std::vector<std::pair<const char*, const Core::Image*>>
+            debugInternalImages() const;
+#endif
 
         // Trivially copyable, moveable and destructible
         Context(const Context&) = default;

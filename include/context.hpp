@@ -10,6 +10,7 @@
 #include "hooks.hpp"
 #include "mini/commandbuffer.hpp"
 #include "mini/commandpool.hpp"
+#include "mini/fence.hpp"
 #include "mini/image.hpp"
 #include "mini/semaphore.hpp"
 
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <memory>
 #include <vector>
+#include <string>
 
 ///
 /// This class is the frame generation context. There should be one instance per swapchain.
@@ -51,6 +53,17 @@ public:
     VkResult present(const Hooks::DeviceInfo& info, const void* pNext, VkQueue queue,
         const std::vector<VkSemaphore>& gameRenderSemaphores, uint32_t presentIdx);
 
+    /// Whether framegen was disabled for this swapchain after repeated sync
+    /// failures. The present hook passes frames through untouched when set.
+    [[nodiscard]] bool isDisabled() const { return this->forceDisabled; }
+
+    ///
+    /// Pace and forward a present without frame generation (multiplier <= 1).
+    /// Applies the same vsync-locked fps limiter as the framegen path so the
+    /// cap also works as a plain frame limiter.
+    ///
+    VkResult presentPassthrough(VkQueue queue, const VkPresentInfoKHR* pPresentInfo);
+
     // Non-copyable, trivially moveable and destructible
     LsContext(const LsContext&) = delete;
     LsContext& operator=(const LsContext&) = delete;
@@ -68,6 +81,44 @@ private:
 
     Mini::CommandPool cmdPool;
     uint64_t frameIdx{0};
+
+#ifdef __ANDROID__
+    void paceBaseFrame(int fpsLimit);
+
+    Mini::Fence preCopyFence;   // signaled when the swapchain -> frame_n copy completes
+    uint32_t copyFenceTimeouts{0};
+    bool forceDisabled{false};
+
+    int64_t pacerAnchorNs{0};       // schedule anchor of the current real frame
+    int64_t pacerNextDueNs{0};      // next vsync-grid slot for the real frame
+    int64_t lastRealPresentNs{0};   // previous real-frame entry, for the EWMA
+    uint64_t baseIntervalEwmaNs{0}; // measured real-frame interval
+
+    // display vsync grid, published by the app (vsync.txt next to conf.toml);
+    // Choreographer timestamps share CLOCK_MONOTONIC with the pacer
+    int64_t vsyncPhaseNs{0};
+    int64_t vsyncPeriodNs{0};
+    int64_t vsyncLastReadNs{0};
+
+    uint64_t statsPresents{0};      // presents (real + generated) in the window
+    uint64_t statsRealPresents{0};  // real presents in the window
+    int64_t statsWindowStartNs{0};
+
+    // per-stage timing accumulators for the stats window
+    uint64_t statsWorkNs{0};        // copy fence wait + framegen + waitIdle
+    uint64_t statsGenSleepNs{0};    // slept before generated presents
+    uint64_t statsGenLateNs{0};     // generated present lateness vs its slot
+    uint64_t statsGenSkips{0};      // generated frames dropped to hold cadence
+    uint64_t statsGenPresentNs{0};  // time blocked in generated queuePresent calls
+    uint64_t statsRealPresentNs{0}; // time blocked in the real queuePresent call
+    std::string statsSeq;           // recent image-index sequence (R=real, g=gen)
+
+    void dumpFrameImages(const Hooks::DeviceInfo& info, uint32_t presentIdx);
+    int dumpDoneFrames{0};          // presents already dumped (debug_dump)
+    bool dumpFailed{false};
+#else
+    static constexpr bool forceDisabled = false;
+#endif
 
     struct RenderPassInfo {
         Mini::CommandBuffer preCopyBuf; // copy from swapchain image to frame_0/frame_1
