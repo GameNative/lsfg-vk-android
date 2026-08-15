@@ -191,12 +191,47 @@ namespace Layer {
         uint32_t queueFamilyIndex,
         uint32_t queueIndex,
         VkQueue* pQueue);
+    /// Query physical device features (returns false when unavailable).
+    bool ovkGetPhysicalDeviceFeatures(
+        VkPhysicalDevice physicalDevice,
+        VkPhysicalDeviceFeatures* pFeatures);
+    /// Query physical device features2 (returns false when unavailable).
+    bool ovkGetPhysicalDeviceFeatures2(
+        VkPhysicalDevice physicalDevice,
+        VkPhysicalDeviceFeatures2* pFeatures);
+    /// The instance the layer initialized on.
+    VkInstance ovkInstance();
+
     /// Call to the original vkQueueSubmit function.
     VkResult ovkQueueSubmit(
         VkQueue queue,
         uint32_t submitCount,
         const VkSubmitInfo* pSubmits,
         VkFence fence);
+
+    /// Call to the original vkCreateFence function.
+    VkResult ovkCreateFence(
+        VkDevice device,
+        const VkFenceCreateInfo* pCreateInfo,
+        const VkAllocationCallbacks* pAllocator,
+        VkFence* pFence);
+    /// Call to the original vkDestroyFence function.
+    void ovkDestroyFence(
+        VkDevice device,
+        VkFence fence,
+        const VkAllocationCallbacks* pAllocator);
+    /// Call to the original vkWaitForFences function.
+    VkResult ovkWaitForFences(
+        VkDevice device,
+        uint32_t fenceCount,
+        const VkFence* pFences,
+        VkBool32 waitAll,
+        uint64_t timeout);
+    /// Call to the original vkResetFences function.
+    VkResult ovkResetFences(
+        VkDevice device,
+        uint32_t fenceCount,
+        const VkFence* pFences);
 
     /// Call to the original vkCmdPipelineBarrier function.
     void ovkCmdPipelineBarrier(
@@ -229,6 +264,54 @@ namespace Layer {
         VkSemaphore semaphore,
         VkFence fence,
         uint32_t* pImageIndex);
+
+    /// Call to the original vkCreateBuffer function.
+    VkResult ovkCreateBuffer(
+        VkDevice device,
+        const VkBufferCreateInfo* pCreateInfo,
+        const VkAllocationCallbacks* pAllocator,
+        VkBuffer* pBuffer);
+    /// Call to the original vkDestroyBuffer function.
+    void ovkDestroyBuffer(
+        VkDevice device,
+        VkBuffer buffer,
+        const VkAllocationCallbacks* pAllocator);
+    /// Call to the original vkGetBufferMemoryRequirements function.
+    void ovkGetBufferMemoryRequirements(
+        VkDevice device,
+        VkBuffer buffer,
+        VkMemoryRequirements* pMemoryRequirements);
+    /// Call to the original vkBindBufferMemory function.
+    VkResult ovkBindBufferMemory(
+        VkDevice device,
+        VkBuffer buffer,
+        VkDeviceMemory memory,
+        VkDeviceSize memoryOffset);
+    /// Call to the original vkMapMemory function.
+    VkResult ovkMapMemory(
+        VkDevice device,
+        VkDeviceMemory memory,
+        VkDeviceSize offset,
+        VkDeviceSize size,
+        VkMemoryMapFlags flags,
+        void** ppData);
+    /// Call to the original vkUnmapMemory function.
+    void ovkUnmapMemory(
+        VkDevice device,
+        VkDeviceMemory memory);
+    /// Call to the original vkInvalidateMappedMemoryRanges function.
+    VkResult ovkInvalidateMappedMemoryRanges(
+        VkDevice device,
+        uint32_t memoryRangeCount,
+        const VkMappedMemoryRange* pMemoryRanges);
+    /// Call to the original vkCmdCopyImageToBuffer function.
+    void ovkCmdCopyImageToBuffer(
+        VkCommandBuffer commandBuffer,
+        VkImage srcImage,
+        VkImageLayout srcImageLayout,
+        VkBuffer dstBuffer,
+        uint32_t regionCount,
+        const VkBufferImageCopy* pRegions);
 }
 
 /// Symbol definition for Vulkan instance layer.

@@ -55,6 +55,11 @@ namespace LSFG_3_1 {
             VkExtent2D extent, VkFormat format);
 #endif
 
+        /// Single-device variant wrapping caller-owned VkImages.
+        Context(Vulkan& vk,
+            VkImage in0, VkImage in1, const std::vector<VkImage>& outN,
+            VkExtent2D extent, VkFormat format);
+
         ///
         /// Present on the context.
         ///

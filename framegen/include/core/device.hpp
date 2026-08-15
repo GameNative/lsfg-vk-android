@@ -28,6 +28,21 @@ namespace LSFG::Core {
         ///
         Device(const Instance& instance, uint64_t deviceUUID);
 
+        ///
+        /// Adopt an externally owned device. The caller keeps ownership of
+        /// every handle; the instance must have been adopted with a custom
+        /// loader entry point first. Barriers use the sync1 compat path since
+        /// the caller's device features are unknown.
+        ///
+        /// @param instance Adopted instance (loader already initialized).
+        /// @param physical Physical device the external device was created on.
+        /// @param external Device owned by the caller.
+        /// @param queueFamilyIdx Queue family of the queue below.
+        /// @param queue Queue all framegen work is submitted to.
+        ///
+        Device(const Instance& instance, VkPhysicalDevice physical,
+            VkDevice external, uint32_t queueFamilyIdx, VkQueue queue);
+
         /// Get the Vulkan handle.
         [[nodiscard]] auto handle() const { return *this->device; }
         /// Get the physical device associated with this logical device.

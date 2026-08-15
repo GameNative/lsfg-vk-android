@@ -5,6 +5,7 @@
 #include "core/image.hpp"
 #include "core/instance.hpp"
 #include "common/exception.hpp"
+#include "common/utils.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -534,6 +535,61 @@ Device::Device(const Instance& instance, uint64_t deviceUUID) {
     if (!this->nullDescriptorSupported) {
         this->fallbackDescriptorImage = std::make_shared<Core::Image>(*this,
             VkExtent2D{1, 1}, VK_FORMAT_R8G8B8A8_UNORM,
-            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT
+                | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+        // The fallback substitutes for nullDescriptor bindings, whose reads
+        // must return zeros. Its memory is undefined at creation — some
+        // drivers hand back zero pages, others garbage.
+        Utils::clearImage(*this, *this->fallbackDescriptorImage);
     }
+}
+
+Device::Device(const Instance& instance, VkPhysicalDevice physical,
+        VkDevice external, uint32_t queueFamilyIdx, VkQueue queue) {
+    (void)instance; // loader entry points already installed by the adopted Instance
+    LSFG_FRAMEGEN_LOGI("Entering Device::Device (adopted) — %s", kFramegenBuildStamp);
+
+    volkLoadDevice(external);
+
+    // The host application owns this device and picked its features; sync2
+    // entry points can resolve even when the feature was never enabled, and
+    // calling them would be invalid. Force every barrier through the sync1
+    // compat path, which is unconditionally legal.
+    vkCmdPipelineBarrier2 = nullptr;
+    LSFG_FRAMEGEN_LOGI(
+        "Adopted external device (queueFamily=%u); barriers via sync1 compat path",
+        queueFamilyIdx);
+
+    if (vkGetPhysicalDeviceFeatures != nullptr && vkGetPhysicalDeviceFormatProperties != nullptr) {
+        VkPhysicalDeviceFeatures probed{};
+        vkGetPhysicalDeviceFeatures(physical, &probed);
+        VkFormatProperties r8{};
+        vkGetPhysicalDeviceFormatProperties(physical, VK_FORMAT_R8_UNORM, &r8);
+        VkFormatProperties rgba16f{};
+        vkGetPhysicalDeviceFormatProperties(physical, VK_FORMAT_R16G16B16A16_SFLOAT, &rgba16f);
+        LSFG_FRAMEGEN_LOGI(
+            "Adopted-device caps: extFormats=%d readWoFmt=%d writeWoFmt=%d "
+            "r8unorm.optimal=0x%x rgba16f.optimal=0x%x (STORAGE_IMAGE=0x%x)",
+            (int)probed.shaderStorageImageExtendedFormats,
+            (int)probed.shaderStorageImageReadWithoutFormat,
+            (int)probed.shaderStorageImageWriteWithoutFormat,
+            r8.optimalTilingFeatures, rgba16f.optimalTilingFeatures,
+            VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
+    }
+
+    this->computeQueue = queue;
+    this->computeFamilyIdx = queueFamilyIdx;
+    this->physicalDevice = physical;
+    // Unknown whether robustness2/nullDescriptor was enabled — assume not and
+    // use the fallback image for optional bindings.
+    this->nullDescriptorSupported = false;
+    this->device = std::shared_ptr<VkDevice>(
+        new VkDevice(external),
+        [](VkDevice* device) { delete device; }
+    );
+    this->fallbackDescriptorImage = std::make_shared<Core::Image>(*this,
+        VkExtent2D{1, 1}, VK_FORMAT_R8G8B8A8_UNORM,
+        VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT
+            | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    Utils::clearImage(*this, *this->fallbackDescriptorImage);
 }

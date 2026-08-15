@@ -380,3 +380,43 @@ Image::Image(const Core::Device& device, VkExtent2D extent, VkFormat format,
 }
 
 #endif // __ANDROID__
+
+Image::Image(const Core::Device& device, VkImage externalImage,
+        VkExtent2D extent, VkFormat format, VkImageAspectFlags aspectFlags)
+        : extent(extent), format(format), aspectFlags(aspectFlags) {
+    const VkImageViewCreateInfo viewDesc{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = externalImage,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = format,
+        .components = {
+            .r = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .g = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .b = VK_COMPONENT_SWIZZLE_IDENTITY,
+            .a = VK_COMPONENT_SWIZZLE_IDENTITY,
+        },
+        .subresourceRange = {
+            .aspectMask = aspectFlags,
+            .levelCount = 1,
+            .layerCount = 1,
+        },
+    };
+    VkImageView viewHandle{};
+    auto res = vkCreateImageView(device.handle(), &viewDesc, nullptr, &viewHandle);
+    if (res != VK_SUCCESS || viewHandle == VK_NULL_HANDLE)
+        throw LSFG::vulkan_error(res, "Failed to create view for wrapped image");
+
+    // Wrapped images are handed over in GENERAL layout, same convention as
+    // the AHB path. The image and its memory stay caller-owned.
+    this->layout = std::make_shared<VkImageLayout>(VK_IMAGE_LAYOUT_GENERAL);
+    this->image = std::shared_ptr<VkImage>(
+        new VkImage(externalImage),
+        [](VkImage* img) { delete img; }
+    );
+    this->view = std::shared_ptr<VkImageView>(
+        new VkImageView(viewHandle),
+        [dev = device.handle()](VkImageView* imgView) {
+            vkDestroyImageView(dev, *imgView, nullptr);
+        }
+    );
+}
