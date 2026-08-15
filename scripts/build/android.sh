@@ -56,11 +56,11 @@ HOST_OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 STRIP_BIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_TAG:-${HOST_OS}-x86_64}/bin/llvm-strip"
 if [[ -x "${STRIP_BIN}" ]]; then
     "${STRIP_BIN}" --strip-unneeded \
-        -o "${DIST_DIR}/liblsfg-vk-${ABI}.so" \
+        -o "${DIST_DIR}/liblsfg-vk-layer.so" \
         "${BUILD_DIR}/liblsfg-vk.so"
 else
     echo "warning: llvm-strip not found at ${STRIP_BIN}; copying unstripped library" >&2
-    cp "${BUILD_DIR}/liblsfg-vk.so" "${DIST_DIR}/liblsfg-vk-${ABI}.so"
+    cp "${BUILD_DIR}/liblsfg-vk.so" "${DIST_DIR}/liblsfg-vk-layer.so"
 fi
 
 cp "${REPO_ROOT}/VkLayer_LS_frame_generation.json" "${BUILD_DIR}/"
@@ -68,8 +68,8 @@ cp "${REPO_ROOT}/VkLayer_LS_frame_generation.json" "${DIST_DIR}/"
 
 echo ""
 echo "Build complete. Artifacts:"
-echo "  ${DIST_DIR}/liblsfg-vk-${ABI}.so"
+echo "  ${DIST_DIR}/liblsfg-vk-layer.so"
 echo "  ${DIST_DIR}/VkLayer_LS_frame_generation.json"
 echo ""
 echo "For GameNative Android app updates, copy the arm64-v8a shared library to:"
-echo "  app/src/main/assets/lsfg_vk/android_arm64_v8a/liblsfg-vk-layer.so"
+echo "  app/src/main/jniLibs/arm64-v8a/liblsfg-vk-layer.so"

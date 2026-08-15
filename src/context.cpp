@@ -9,7 +9,6 @@
 #include "layer.hpp"
 
 #ifdef __ANDROID__
-#include <android/hardware_buffer.h>
 #include <android/log.h>
 #endif
 

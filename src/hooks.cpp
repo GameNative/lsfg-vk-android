@@ -61,17 +61,39 @@ namespace {
             const VkDeviceCreateInfo* pCreateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkDevice* pDevice) {
-        // add extensions
+        // add extensions, skipping any the driver doesn't expose — appending
+        // an unsupported name would fail the game's entire device creation
+        std::vector<const char*> wanted{
+            "VK_KHR_external_memory",
+            "VK_KHR_external_memory_fd",
+            "VK_KHR_external_semaphore",
+            "VK_KHR_external_semaphore_fd"
+        };
+        uint32_t supportedCount{};
+        std::vector<VkExtensionProperties> supportedExts;
+        if (Layer::ovkEnumerateDeviceExtensionProperties(physicalDevice,
+                &supportedCount, nullptr) && supportedCount > 0) {
+            supportedExts.resize(supportedCount);
+            if (!Layer::ovkEnumerateDeviceExtensionProperties(physicalDevice,
+                    &supportedCount, supportedExts.data()))
+                supportedExts.clear();
+        }
+        if (!supportedExts.empty()) {
+            std::erase_if(wanted, [&supportedExts](const char* name) {
+                const bool found = std::ranges::any_of(supportedExts,
+                    [name](const VkExtensionProperties& p) {
+                        return std::string(static_cast<const char*>(p.extensionName)) == name;
+                    });
+                if (!found)
+                    std::cerr << "lsfg-vk: skipping unsupported device extension "
+                        << name << "\n";
+                return !found;
+            });
+        }
         auto extensions = Utils::addExtensions(
             pCreateInfo->ppEnabledExtensionNames,
             pCreateInfo->enabledExtensionCount,
-            {
-                "VK_KHR_external_memory",
-                "VK_KHR_external_memory_fd",
-                "VK_KHR_external_semaphore",
-                "VK_KHR_external_semaphore_fd"
-            }
-        );
+            wanted);
         VkDeviceCreateInfo createInfo = *pCreateInfo;
         createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         createInfo.ppEnabledExtensionNames = extensions.data();
