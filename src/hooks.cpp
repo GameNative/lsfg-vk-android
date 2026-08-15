@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <filesystem>
 #include <stdexcept>
+#include <mutex>
 #include <algorithm>
 #include <exception>
 #include <iostream>
@@ -51,6 +52,13 @@ namespace {
 
     /// Map of devices to related information.
     std::unordered_map<VkDevice, DeviceInfo> deviceToInfo;
+
+    // Serializes every hook that touches the shared maps, the framegen module
+    // state or the framegen queue. Two windows presenting from two threads
+    // would otherwise race the singleton (and vkQueue* calls made by the
+    // layer), which can hard-lock the driver — most visibly when a config
+    // reload finalizes the framegen module mid-present.
+    std::mutex hookMutex;
 
     ///
     /// Add extensions to the device create info.
@@ -177,6 +185,8 @@ namespace {
             VkDeviceCreateInfo* pCreateInfo,
             const VkAllocationCallbacks*,
             VkDevice* pDevice) {
+        const std::lock_guard<std::mutex> lock(hookMutex);
+
         deviceToInfo.emplace(*pDevice, DeviceInfo {
             .device = *pDevice,
             .physicalDevice = physicalDevice,
@@ -187,6 +197,8 @@ namespace {
 
     /// Erase the device information when the device is destroyed.
     void myvkDestroyDevice(VkDevice device, const VkAllocationCallbacks* pAllocator) noexcept {
+        const std::lock_guard<std::mutex> lock(hookMutex);
+
         deviceToInfo.erase(device);
         Layer::ovkDestroyDevice(device, pAllocator);
     }
@@ -203,6 +215,8 @@ namespace {
             const VkSwapchainCreateInfoKHR* pCreateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkSwapchainKHR* pSwapchain) noexcept {
+        const std::lock_guard<std::mutex> lock(hookMutex);
+
         // find device
         auto it = deviceToInfo.find(device);
         if (it == deviceToInfo.end()) {
@@ -240,8 +254,11 @@ namespace {
 
         // retire potential old swapchain
         if (pCreateInfo->oldSwapchain) {
+            std::cerr << "lsfg-vk: retiring old swapchain context\n";
             swapchains.erase(pCreateInfo->oldSwapchain);
             swapchainToDeviceTable.erase(pCreateInfo->oldSwapchain);
+            swapchainToPresent.erase(pCreateInfo->oldSwapchain);
+            std::cerr << "lsfg-vk: old swapchain context retired\n";
         }
 
         // create swapchain
@@ -291,6 +308,8 @@ namespace {
     VkResult myvkQueuePresentKHR(
             VkQueue queue,
             const VkPresentInfoKHR* pPresentInfo) noexcept {
+        const std::lock_guard<std::mutex> lock(hookMutex);
+
         // find swapchain device
         auto it = swapchainToDeviceTable.find(*pPresentInfo->pSwapchains);
         if (it == swapchainToDeviceTable.end()) {
@@ -379,6 +398,8 @@ namespace {
                     }
                 }
                 if (!pacingOnly) {
+                    Utils::logLimitN("swapReconf", 3,
+                        "config changed, forcing swapchain recreation");
                     Layer::ovkQueuePresentKHR(queue, pPresentInfo);
                     return VK_ERROR_OUT_OF_DATE_KHR;
                 }
@@ -389,6 +410,17 @@ namespace {
                 Layer::ovkQueuePresentKHR(queue, pPresentInfo);
                 return VK_ERROR_OUT_OF_DATE_KHR;
             }
+
+            // a config reload finalized the framegen module after this context
+            // was created — its framegen context id is dead. Present the frame
+            // untouched and force the game to recreate the swapchain.
+            if (swapchain.isStale()) {
+                Utils::logLimitN("swapStale", 3,
+                    "stale framegen context, forcing swapchain recreation");
+                Layer::ovkQueuePresentKHR(queue, pPresentInfo);
+                return VK_ERROR_OUT_OF_DATE_KHR;
+            }
+            Utils::resetLimitN("swapStale");
 
             // no framegen at multiplier <= 1, but the fps cap still applies
             if (conf.multiplier <= 1)
@@ -406,6 +438,8 @@ namespace {
                 queue, semaphores, *pPresentInfo->pImageIndices);
 
             Utils::resetLimitN("swapPresent");
+            Utils::resetLimitN("swapReconf");
+            Utils::resetLimitN("swapStale");
         } catch (const std::exception& e) {
             Utils::logLimitN("swapPresent", 5,
                 "An error occurred while presenting the swapchain:\n"
@@ -420,10 +454,17 @@ namespace {
             VkDevice device,
             VkSwapchainKHR swapchain,
             const VkAllocationCallbacks* pAllocator) noexcept {
+        const std::lock_guard<std::mutex> lock(hookMutex);
+
+        const bool hadContext = swapchains.find(swapchain) != swapchains.end();
+        if (hadContext)
+            std::cerr << "lsfg-vk: destroying swapchain context\n";
         swapchains.erase(swapchain);
         swapchainToDeviceTable.erase(swapchain);
         swapchainToPresent.erase(swapchain);
         Layer::ovkDestroySwapchainKHR(device, swapchain, pAllocator);
+        if (hadContext)
+            std::cerr << "lsfg-vk: swapchain context destroyed\n";
     }
 }
 
