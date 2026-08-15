@@ -765,12 +765,26 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     const int64_t workStartNs = nowNs();
 
     // 2. Tell framegen to generate intermediary frames
-    //    presentContext(id, -1, {}) — no semaphore FDs, synchronous
+    //    presentContext(id, -1, {}) — no semaphore FDs, synchronous.
+    //    A graph-side fence timeout counts toward the same watchdog as the
+    //    copy fence: enough of them disables framegen for this swapchain
+    //    (full-speed passthrough) instead of a 2s-stall-per-frame loop.
     std::vector<int> noOutSems;  // empty
-    if (conf.performance)
-        LSFG_3_1P::presentContext(*this->lsfgCtxId, -1, noOutSems);
-    else
-        LSFG_3_1::presentContext(*this->lsfgCtxId, -1, noOutSems);
+    try {
+        if (conf.performance)
+            LSFG_3_1P::presentContext(*this->lsfgCtxId, -1, noOutSems);
+        else
+            LSFG_3_1::presentContext(*this->lsfgCtxId, -1, noOutSems);
+    } catch (const LSFG::vulkan_error& e) {
+        if (e.error() == VK_TIMEOUT
+                && ++this->copyFenceTimeouts >= kMaxFenceTimeouts
+                && !this->forceDisabled) {
+            this->forceDisabled = true;
+            std::cerr << "lsfg-vk: disabling frame generation for this swapchain after "
+                << this->copyFenceTimeouts << " framegen fence timeouts\n";
+        }
+        throw;
+    }
 
     // 3. No CPU-side wait: framegen submitted on the same queue, so the
     //    generated-frame copies below are ordered after it by submission
@@ -819,11 +833,17 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
             sleepUntilNs(dueNs);
         }
 
-        // acquire next swapchain image
+        // acquire next swapchain image. Bounded: with the GPU saturated no
+        // image may free up, and an unbounded wait here freezes the game's
+        // present thread. A timed-out generated frame is just dropped.
         pass.acquireSemaphores.at(i) = Mini::Semaphore(info.device);
         uint32_t imageIdx{};
-        auto res = Layer::ovkAcquireNextImageKHR(info.device, this->swapchain, UINT64_MAX,
+        auto res = Layer::ovkAcquireNextImageKHR(info.device, this->swapchain, 200'000'000ull,
             pass.acquireSemaphores.at(i).handle(), VK_NULL_HANDLE, &imageIdx);
+        if (res == VK_TIMEOUT || res == VK_NOT_READY) {
+            this->statsGenSkips++;
+            continue;
+        }
         if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
             throw LSFG::vulkan_error(res, "Failed to acquire next swapchain image");
         if (this->statsSeq.size() < 200)
