@@ -4,7 +4,6 @@
 #include "hooks.hpp"
 
 #ifdef __ANDROID__
-#include <android/hardware_buffer.h>
 #include <android/log.h>
 #endif
 
@@ -34,6 +33,7 @@ namespace {
     PFN_vkGetPhysicalDeviceProperties next_vkGetPhysicalDeviceProperties{};
     PFN_vkGetPhysicalDeviceFeatures next_vkGetPhysicalDeviceFeatures{};
     PFN_vkGetPhysicalDeviceFeatures2 next_vkGetPhysicalDeviceFeatures2{};
+    PFN_vkEnumerateDeviceExtensionProperties next_vkEnumerateDeviceExtensionProperties{};
     PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR next_vkGetPhysicalDeviceSurfaceCapabilitiesKHR{};
 
     VkInstance g_instanceHandle{};
@@ -58,9 +58,6 @@ namespace {
     PFN_vkDestroySemaphore next_vkDestroySemaphore{};
     PFN_vkGetMemoryFdKHR next_vkGetMemoryFdKHR{};
     PFN_vkGetSemaphoreFdKHR next_vkGetSemaphoreFdKHR{};
-#ifdef __ANDROID__
-    PFN_vkGetAndroidHardwareBufferPropertiesANDROID next_vkGetAndroidHardwareBufferPropertiesANDROID{};
-#endif
     PFN_vkGetDeviceQueue next_vkGetDeviceQueue{};
     PFN_vkQueueSubmit next_vkQueueSubmit{};
     PFN_vkCreateFence next_vkCreateFence{};
@@ -167,6 +164,10 @@ namespace {
                 "vkGetPhysicalDeviceFeatures", &next_vkGetPhysicalDeviceFeatures);
             initInstanceFunc(*pInstance,
                 "vkGetPhysicalDeviceFeatures2", &next_vkGetPhysicalDeviceFeatures2);
+            // optional: used to skip unsupported device extensions instead of
+            // failing the game's device creation
+            initInstanceFunc(*pInstance,
+                "vkEnumerateDeviceExtensionProperties", &next_vkEnumerateDeviceExtensionProperties);
             g_instanceHandle = *pInstance;
 
             std::cerr << "lsfg-vk: Vulkan instance layer initialized successfully.\n";
@@ -244,18 +245,14 @@ namespace {
             success &= initDeviceFunc(*pDevice, "vkDestroyImage", &next_vkDestroyImage);
             success &= initDeviceFunc(*pDevice, "vkGetImageMemoryRequirements", &next_vkGetImageMemoryRequirements);
             success &= initDeviceFunc(*pDevice, "vkBindImageMemory", &next_vkBindImageMemory);
-            success &= initDeviceFunc(*pDevice, "vkGetMemoryFdKHR", &next_vkGetMemoryFdKHR);
+            // optional: only used by the desktop OPAQUE_FD sharing path
+            initDeviceFunc(*pDevice, "vkGetMemoryFdKHR", &next_vkGetMemoryFdKHR);
             success &= initDeviceFunc(*pDevice, "vkAllocateMemory", &next_vkAllocateMemory);
             success &= initDeviceFunc(*pDevice, "vkFreeMemory", &next_vkFreeMemory);
             success &= initDeviceFunc(*pDevice, "vkCreateSemaphore", &next_vkCreateSemaphore);
             success &= initDeviceFunc(*pDevice, "vkDestroySemaphore", &next_vkDestroySemaphore);
-            success &= initDeviceFunc(*pDevice, "vkGetSemaphoreFdKHR", &next_vkGetSemaphoreFdKHR);
-#ifdef __ANDROID__
-            // AHB function is optional — not all ICDs (e.g. Vortek wrapper) support it.
-            // If unavailable, the AHB image path will fail at point-of-use, but
-            // the layer still initializes so it can fall back gracefully.
-            initDeviceFunc(*pDevice, "vkGetAndroidHardwareBufferPropertiesANDROID", &next_vkGetAndroidHardwareBufferPropertiesANDROID);
-#endif
+            // optional: only used by the desktop OPAQUE_FD sharing path
+            initDeviceFunc(*pDevice, "vkGetSemaphoreFdKHR", &next_vkGetSemaphoreFdKHR);
             success &= initDeviceFunc(*pDevice, "vkGetDeviceQueue", &next_vkGetDeviceQueue);
             success &= initDeviceFunc(*pDevice, "vkQueueSubmit", &next_vkQueueSubmit);
             success &= initDeviceFunc(*pDevice, "vkCreateFence", &next_vkCreateFence);
@@ -402,6 +399,14 @@ namespace Layer {
         next_vkGetPhysicalDeviceFeatures2(physicalDevice, pFeatures);
         return true;
     }
+    bool ovkEnumerateDeviceExtensionProperties(
+            VkPhysicalDevice physicalDevice,
+            uint32_t* pPropertyCount,
+            VkExtensionProperties* pProperties) {
+        if (!next_vkEnumerateDeviceExtensionProperties) return false;
+        return next_vkEnumerateDeviceExtensionProperties(
+            physicalDevice, nullptr, pPropertyCount, pProperties) == VK_SUCCESS;
+    }
     VkInstance ovkInstance() {
         return g_instanceHandle;
     }
@@ -537,23 +542,16 @@ namespace Layer {
             VkDevice device,
             const VkMemoryGetFdInfoKHR* pGetFdInfo,
             int* pFd) {
+        if (!next_vkGetMemoryFdKHR) return VK_ERROR_EXTENSION_NOT_PRESENT;
         return next_vkGetMemoryFdKHR(device, pGetFdInfo, pFd);
     }
     VkResult ovkGetSemaphoreFdKHR(
             VkDevice device,
             const VkSemaphoreGetFdInfoKHR* pGetFdInfo,
             int* pFd) {
+        if (!next_vkGetSemaphoreFdKHR) return VK_ERROR_EXTENSION_NOT_PRESENT;
         return next_vkGetSemaphoreFdKHR(device, pGetFdInfo, pFd);
     }
-
-#ifdef __ANDROID__
-    VkResult ovkGetAndroidHardwareBufferPropertiesANDROID(
-            VkDevice device,
-            const AHardwareBuffer* hardwareBuffer,
-            VkAndroidHardwareBufferPropertiesANDROID* pProperties) {
-        return next_vkGetAndroidHardwareBufferPropertiesANDROID(device, hardwareBuffer, pProperties);
-    }
-#endif
 
     void ovkGetDeviceQueue(
             VkDevice device,

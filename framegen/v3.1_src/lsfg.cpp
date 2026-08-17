@@ -27,6 +27,21 @@ namespace {
     std::optional<Vulkan> device;
     std::unordered_map<int32_t, Context> contexts;
     bool externalMode = false;
+
+    // Bounded drain of the framegen queue: a fence-only submit completes when
+    // all previously submitted work does. Used instead of vkQueueWaitIdle /
+    // vkDeviceWaitIdle in external mode, where an unbounded wait on the game's
+    // queue can freeze the present thread forever if the queue is wedged.
+    void drainQueueBounded(VkDevice dev, VkQueue queue) {
+        const VkFenceCreateInfo fenceInfo{
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO };
+        VkFence fence{};
+        if (vkCreateFence(dev, &fenceInfo, nullptr, &fence) != VK_SUCCESS)
+            return;
+        if (vkQueueSubmit(queue, 0, nullptr, fence) == VK_SUCCESS)
+            vkWaitForFences(dev, 1, &fence, VK_TRUE, 2'000'000'000ULL);
+        vkDestroyFence(dev, fence, nullptr);
+    }
 }
 
 void LSFG_3_1::initialize(uint64_t deviceUUID,
@@ -110,7 +125,14 @@ void LSFG_3_1::deleteContext(int32_t id) {
     if (it == contexts.end())
         throw LSFG::vulkan_error(VK_ERROR_DEVICE_LOST, "No such context");
 
-    vkDeviceWaitIdle(device->device.handle());
+    // external mode: the device belongs to the game — idling it from a layer
+    // hook races the game's own queue access and can deadlock the driver.
+    // All framegen work is submitted on this one queue, so drain just it,
+    // with a bounded wait so a wedged queue can't freeze the present thread.
+    if (externalMode)
+        drainQueueBounded(device->device.handle(), device->device.getComputeQueue());
+    else
+        vkDeviceWaitIdle(device->device.handle());
     contexts.erase(it);
 }
 
@@ -118,10 +140,15 @@ void LSFG_3_1::finalize() {
     if (!instance.has_value() || !device.has_value())
         return;
 
-    vkDeviceWaitIdle(device->device.handle());
+    // see deleteContext: never idle the game's whole device in external mode
+    if (externalMode)
+        drainQueueBounded(device->device.handle(), device->device.getComputeQueue());
+    else
+        vkDeviceWaitIdle(device->device.handle());
     contexts.clear();
     device.reset();
     instance.reset();
+    externalMode = false;
 }
 
 #ifdef __ANDROID__

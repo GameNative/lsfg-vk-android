@@ -9,7 +9,6 @@
 #include "layer.hpp"
 
 #ifdef __ANDROID__
-#include <android/hardware_buffer.h>
 #include <android/log.h>
 #endif
 
@@ -20,6 +19,7 @@
 #include <filesystem>
 #include <exception>
 #include <iostream>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <vector>
@@ -28,6 +28,18 @@
 #include <string>
 #include <thread>
 #include <array>
+
+namespace {
+    // Bumped whenever a config reload finalizes the shared framegen module.
+    // LsContexts created before the bump hold dead framegen context ids; the
+    // present hook forces the game to recreate their swapchains instead of
+    // presenting through them.
+    std::atomic<uint64_t> g_lsfgModuleEpoch{1};
+}
+
+bool LsContext::isStale() const {
+    return this->lsfgEpoch != g_lsfgModuleEpoch.load(std::memory_order_relaxed);
+}
 
 #ifdef __ANDROID__
 #include <algorithm>
@@ -46,6 +58,44 @@ namespace {
         timespec ts{};
         clock_gettime(CLOCK_MONOTONIC, &ts);
         return static_cast<int64_t>(ts.tv_sec) * 1'000'000'000LL + ts.tv_nsec;
+    }
+
+    // Present-thread watchdog: the present hook publishes the stage it is
+    // about to block in; a background thread reports any stage held for more
+    // than 2 seconds. "idle" means the layer returned to the game — a freeze
+    // while idle is a stall on the game/DXVK side, not in the layer.
+    std::atomic<const char*> g_presentStage{"idle"};
+    std::atomic<int64_t> g_presentStageSetNs{0};
+    std::atomic<bool> g_watchdogStarted{false};
+
+    void setStage(const char* stage) {
+        g_presentStage.store(stage, std::memory_order_relaxed);
+        g_presentStageSetNs.store(nowNs(), std::memory_order_relaxed);
+    }
+
+    void startWatchdog() {
+        bool expected = false;
+        if (!g_watchdogStarted.compare_exchange_strong(expected, true))
+            return;
+        std::thread([] {
+            const char* lastStage = nullptr;
+            int64_t lastSetNs = 0;
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                const char* stage = g_presentStage.load(std::memory_order_relaxed);
+                const int64_t setNs = g_presentStageSetNs.load(std::memory_order_relaxed);
+                if (setNs == 0 || nowNs() - setNs < 2'000'000'000LL)
+                    continue;
+                // report once per distinct stall, then every pass while stuck
+                if (stage == lastStage && setNs == lastSetNs)
+                    continue;
+                lastStage = stage;
+                lastSetNs = setNs;
+                std::cerr << "lsfg-vk: WATCHDOG: present thread stuck in '"
+                    << stage << "' for " << (nowNs() - setNs) / 1'000'000
+                    << " ms\n";
+            }
+        }).detach();
     }
 
     void sleepUntilNs(int64_t targetNs) {
@@ -241,6 +291,7 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
 
         LSFG_3_1P::finalize();
         LSFG_3_1::finalize();
+        g_lsfgModuleEpoch.fetch_add(1, std::memory_order_relaxed);
 
         // print config
         std::cerr << "lsfg-vk: Reloaded configuration for " << name.second << ":\n";
@@ -251,8 +302,12 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
         std::cerr << "  HDR Mode: " << (conf.hdr ? "Enabled" : "Disabled") << '\n';
         if (conf.e_present != 2) std::cerr << "  ! Present Mode: " << conf.e_present << '\n';
 
-        if (conf.multiplier <= 1) return;
+        if (conf.multiplier <= 1) {
+            this->lsfgEpoch = g_lsfgModuleEpoch.load(std::memory_order_relaxed);
+            return;
+        }
     }
+    this->lsfgEpoch = g_lsfgModuleEpoch.load(std::memory_order_relaxed);
     // we could take the format from the swapchain,
     // but honestly this is safer.
     const VkFormat format = conf.hdr
@@ -339,7 +394,15 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
     this->lsfgCtxId = std::shared_ptr<int32_t>(
         new int32_t(ctxId),
         [lsfgDeleteContext = lsfgDeleteContext](const int32_t* id) {
-            lsfgDeleteContext(*id);
+            // never throw out of a destructor/noexcept hook: a config reload
+            // may have finalized the module, orphaning this id
+            try {
+                lsfgDeleteContext(*id);
+            } catch (const std::exception& e) {
+                std::cerr << "lsfg-vk: deleteContext(" << *id << ") failed: "
+                    << e.what() << '\n';
+            }
+            delete id; // NOLINT(cppcoreguidelines-owning-memory)
         }
     );
 
@@ -413,7 +476,15 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
     this->lsfgCtxId = std::shared_ptr<int32_t>(
         new int32_t(lsfgCreateContext(fds.at(0), fds.at(1), outFds, extent, format)),
         [lsfgDeleteContext = lsfgDeleteContext](const int32_t* id) {
-            lsfgDeleteContext(*id);
+            // never throw out of a destructor/noexcept hook: a config reload
+            // may have finalized the module, orphaning this id
+            try {
+                lsfgDeleteContext(*id);
+            } catch (const std::exception& e) {
+                std::cerr << "lsfg-vk: deleteContext(" << *id << ") failed: "
+                    << e.what() << '\n';
+            }
+            delete id; // NOLINT(cppcoreguidelines-owning-memory)
         }
     );
 
@@ -649,9 +720,15 @@ void LsContext::dumpFrameImages(const Hooks::DeviceInfo& info, uint32_t presentI
 
 VkResult LsContext::presentPassthrough(VkQueue queue, const VkPresentInfoKHR* pPresentInfo) {
 #ifdef __ANDROID__
+    startWatchdog();
     this->paceBaseFrame(Config::activeConf.fpsLimit);
-#endif
+    setStage("passthrough present");
+    const auto res = Layer::ovkQueuePresentKHR(queue, pPresentInfo);
+    setStage("idle");
+    return res;
+#else
     return Layer::ovkQueuePresentKHR(queue, pPresentInfo);
+#endif
 }
 
 VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, VkQueue queue,
@@ -665,6 +742,7 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
 
     // Base frame-rate limiter (see paceBaseFrame): the on-screen rate becomes
     // fps_limit * multiplier.
+    startWatchdog();
     this->paceBaseFrame(conf.fpsLimit);
 
     // Track the delivered real-frame interval as an EWMA. A cap is a ceiling,
@@ -685,7 +763,9 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     // If the previous frame's copy still hasn't signaled, the sync path is
     // stuck; pass the frame through untouched. Enough consecutive timeouts
     // disable framegen for this swapchain entirely.
+    setStage("copy fence wait");
     const auto fenceRes = this->preCopyFence.wait(kSyncFenceTimeoutNs);
+    setStage("idle");
     if (fenceRes == VK_SUCCESS)
         this->copyFenceTimeouts = 0;
     if (fenceRes != VK_SUCCESS) {
@@ -703,7 +783,10 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
             .pSwapchains = &this->swapchain,
             .pImageIndices = &presentIdx,
         };
-        return Layer::ovkQueuePresentKHR(queue, &passInfo);
+        setStage("fence-timeout passthrough present");
+        const auto passRes = Layer::ovkQueuePresentKHR(queue, &passInfo);
+        setStage("idle");
+        return passRes;
     }
     this->preCopyFence.reset();
 
@@ -761,12 +844,15 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     // 2. Tell framegen to generate intermediary frames. Graph-side fence
     //    timeouts feed the same watchdog as the copy fence.
     std::vector<int> noOutSems;  // empty
+    setStage("framegen submit");
     try {
         if (conf.performance)
             LSFG_3_1P::presentContext(*this->lsfgCtxId, -1, noOutSems);
         else
             LSFG_3_1::presentContext(*this->lsfgCtxId, -1, noOutSems);
+        setStage("idle");
     } catch (const LSFG::vulkan_error& e) {
+        setStage("idle");
         if (e.error() == VK_TIMEOUT
                 && ++this->copyFenceTimeouts >= kMaxFenceTimeouts
                 && !this->forceDisabled) {
@@ -828,9 +914,16 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
         // saturated GPU; a timed-out generated frame is dropped
         pass.acquireSemaphores.at(i) = Mini::Semaphore(info.device);
         uint32_t imageIdx{};
+        setStage("gen acquire");
         auto res = Layer::ovkAcquireNextImageKHR(info.device, this->swapchain, 200'000'000ull,
             pass.acquireSemaphores.at(i).handle(), VK_NULL_HANDLE, &imageIdx);
+        setStage("idle");
         if (res == VK_TIMEOUT || res == VK_NOT_READY) {
+            // park the semaphore instead of destroying it: some wrapper ICDs
+            // complete a timed-out acquire later and would signal a destroyed
+            // semaphore. Freed with the context.
+            this->retiredSemaphores.emplace_back(
+                std::move(pass.acquireSemaphores.at(i)));
             this->statsGenSkips++;
             continue;
         }
@@ -885,10 +978,15 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
               pass.prevPostCopySemaphores.at(i).handle() });
 
         // present swapchain image
+        // Never attach the game's pNext chain here: it can carry a
+        // VkPresentIdKHR, and a generated frame may be SKIPPED. A present id
+        // that is never queued wedges the game's vkWaitForPresentKHR forever
+        // (DXVK throttles with present_wait — the whole game freezes). The id
+        // rides on the real present below, which always happens.
         VkSemaphore postCopySem = pass.postCopySemaphores.at(i).handle();
         const VkPresentInfoKHR presentInfo{
             .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .pNext = i == 0 ? pNext : nullptr,
+            .pNext = nullptr,
             .waitSemaphoreCount = 1,
             .pWaitSemaphores = &postCopySem,
             .swapchainCount = 1,
@@ -896,7 +994,9 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
             .pImageIndices = &imageIdx,
         };
         const int64_t genPresentStartNs = nowNs();
+        setStage("gen present");
         res = Layer::ovkQueuePresentKHR(queue, &presentInfo);
+        setStage("idle");
         this->statsGenPresentNs += static_cast<uint64_t>(nowNs() - genPresentStartNs);
         if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
             throw LSFG::vulkan_error(res, "Failed to present swapchain image");
@@ -922,6 +1022,7 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
             .at(static_cast<size_t>(lastPresentedGen)).handle());
     const VkPresentInfoKHR finalPresentInfo{
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+        .pNext = pNext, // present id and friends belong to the real frame
         .waitSemaphoreCount = static_cast<uint32_t>(finalWaits.size()),
         .pWaitSemaphores = finalWaits.data(),
         .swapchainCount = 1,
@@ -929,7 +1030,9 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
         .pImageIndices = &presentIdx,
     };
     const int64_t realPresentStartNs = nowNs();
+    setStage("real present");
     auto res = Layer::ovkQueuePresentKHR(queue, &finalPresentInfo);
+    setStage("idle");
     this->statsRealPresentNs += static_cast<uint64_t>(nowNs() - realPresentStartNs);
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
         throw LSFG::vulkan_error(res, "Failed to present swapchain image");

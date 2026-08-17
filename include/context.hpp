@@ -57,6 +57,11 @@ public:
     /// failures. The present hook passes frames through untouched when set.
     [[nodiscard]] bool isDisabled() const { return this->forceDisabled; }
 
+    /// Whether a config reload finalized the framegen module after this
+    /// context was created. Its framegen context id is dead; the present hook
+    /// must force the game to recreate the swapchain instead of presenting.
+    [[nodiscard]] bool isStale() const;
+
     ///
     /// Pace and forward a present without frame generation (multiplier <= 1).
     /// Applies the same vsync-locked fps limiter as the framegen path so the
@@ -76,6 +81,7 @@ private:
     VkExtent2D extent;
 
     std::shared_ptr<int32_t> lsfgCtxId; // lsfg context id
+    uint64_t lsfgEpoch{0}; // framegen module epoch this context was built against
     Mini::Image frame_0, frame_1; // frames shared with lsfg. write to frame_0 when fc % 2 == 0
     std::vector<Mini::Image> out_n; // output images shared with lsfg, indexed by framegen id
 
@@ -88,6 +94,10 @@ private:
     Mini::Fence preCopyFence;   // signaled when the swapchain -> frame_n copy completes
     uint32_t copyFenceTimeouts{0};
     bool forceDisabled{false};
+
+    // acquire semaphores handed to a timed-out vkAcquireNextImageKHR are
+    // parked here instead of destroyed (wrapper ICDs may signal them late)
+    std::vector<Mini::Semaphore> retiredSemaphores;
 
     int64_t pacerAnchorNs{0};       // schedule anchor of the current real frame
     int64_t pacerNextDueNs{0};      // next vsync-grid slot for the real frame

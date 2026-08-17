@@ -47,7 +47,8 @@ cmake -S "${REPO_ROOT}" -B "${BUILD_DIR}" \
     -DLSFGVK_ANDROID_WINE=ON \
     -DVOLK_STATIC_DEFINES=VK_USE_PLATFORM_ANDROID_KHR \
     -DCMAKE_CXX_FLAGS="-DVK_USE_PLATFORM_ANDROID_KHR" \
-    -DCMAKE_C_FLAGS="-DVK_USE_PLATFORM_ANDROID_KHR"
+    -DCMAKE_C_FLAGS="-DVK_USE_PLATFORM_ANDROID_KHR" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-Wl,-z,max-page-size=16384"
 
 cmake --build "${BUILD_DIR}" --parallel
 
@@ -71,4 +72,4 @@ echo "  ${DIST_DIR}/liblsfg-vk-${ABI}.so"
 echo "  ${DIST_DIR}/VkLayer_LS_frame_generation.json"
 echo ""
 echo "For GameNative Android app updates, copy the arm64-v8a shared library to:"
-echo "  app/src/main/assets/lsfg_vk/android_arm64_v8a/liblsfg-vk-layer.so"
+echo "  app/src/main/jniLibs/arm64-v8a/liblsfg-vk-layer.so"

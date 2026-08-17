@@ -11,5 +11,7 @@
 /.cache
 /.ccls
 
-build-android/
-/build-android-*
+build-android*
+
+# IntelliJ idea
+.idea

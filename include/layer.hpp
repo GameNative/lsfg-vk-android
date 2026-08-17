@@ -177,14 +177,6 @@ namespace Layer {
         const VkSemaphoreGetFdInfoKHR* pGetFdInfo,
         int* pFd);
 
-#ifdef __ANDROID__
-    /// Call to the original vkGetAndroidHardwareBufferPropertiesANDROID function.
-    VkResult ovkGetAndroidHardwareBufferPropertiesANDROID(
-        VkDevice device,
-        const AHardwareBuffer* hardwareBuffer,
-        VkAndroidHardwareBufferPropertiesANDROID* pProperties);
-#endif
-
     /// Call to the original vkGetDeviceQueue function.
     void ovkGetDeviceQueue(
         VkDevice device,
@@ -199,6 +191,11 @@ namespace Layer {
     bool ovkGetPhysicalDeviceFeatures2(
         VkPhysicalDevice physicalDevice,
         VkPhysicalDeviceFeatures2* pFeatures);
+    /// Enumerate device extensions (returns false when unavailable or failed).
+    bool ovkEnumerateDeviceExtensionProperties(
+        VkPhysicalDevice physicalDevice,
+        uint32_t* pPropertyCount,
+        VkExtensionProperties* pProperties);
     /// The instance the layer initialized on.
     VkInstance ovkInstance();
 
