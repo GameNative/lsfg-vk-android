@@ -93,3 +93,4 @@ install(FILES "${CMAKE_BINARY_DIR}/liblsfg-vk.so"
     DESTINATION lib)
 install(FILES "${CMAKE_SOURCE_DIR}/VkLayer_LS_frame_generation.json"
     DESTINATION share/vulkan/implicit_layer.d)
+
