@@ -14,6 +14,7 @@
 #include <exception>
 #include <iostream>
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 namespace {
@@ -75,6 +76,31 @@ namespace {
     PFN_vkUnmapMemory next_vkUnmapMemory{};
     PFN_vkInvalidateMappedMemoryRanges next_vkInvalidateMappedMemoryRanges{};
     PFN_vkCmdCopyImageToBuffer next_vkCmdCopyImageToBuffer{};
+
+    // Framegen adopts the game's device but allocates below the loader via
+    // Volk. Dispatchable objects created by a layer must receive loader data,
+    // just like the command buffers allocated by Mini::CommandBuffer.
+    VkResult framegenAllocateCommandBuffers(
+            VkDevice device,
+            const VkCommandBufferAllocateInfo* info,
+            VkCommandBuffer* buffers) {
+        auto res = next_vkAllocateCommandBuffers(device, info, buffers);
+        if (res != VK_SUCCESS)
+            return res;
+        for (uint32_t i = 0; i < info->commandBufferCount; ++i) {
+            res = next_vSetDeviceLoaderData(device, buffers[i]);
+            if (res != VK_SUCCESS) {
+                std::cerr << "lsfg-vk: framegen command buffer loader setup failed: "
+                    << res << '\n';
+                next_vkFreeCommandBuffers(device, info->commandPool,
+                    info->commandBufferCount, buffers);
+                for (uint32_t j = 0; j < info->commandBufferCount; ++j)
+                    buffers[j] = VK_NULL_HANDLE;
+                return res;
+            }
+        }
+        return VK_SUCCESS;
+    }
 
     template<typename T>
     bool initInstanceFunc(VkInstance instance, const char* name, T* func) {
@@ -361,11 +387,17 @@ namespace Layer {
     PFN_vkVoidFunction ovkGetInstanceProcAddr(
             VkInstance instance,
             const char* pName) {
+        // Keep Volk's adopted-device dispatch below our hooks, while routing
+        // its allocations through the loader-data adapter above.
+        if (std::strcmp(pName, "vkGetDeviceProcAddr") == 0)
+            return reinterpret_cast<PFN_vkVoidFunction>(ovkGetDeviceProcAddr);
         return next_vkGetInstanceProcAddr(instance, pName);
     }
     PFN_vkVoidFunction ovkGetDeviceProcAddr(
             VkDevice device,
             const char* pName) {
+        if (std::strcmp(pName, "vkAllocateCommandBuffers") == 0)
+            return reinterpret_cast<PFN_vkVoidFunction>(framegenAllocateCommandBuffers);
         return next_vkGetDeviceProcAddr(device, pName);
     }
 
