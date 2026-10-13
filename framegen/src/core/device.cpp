@@ -586,9 +586,12 @@ Device::Device(const Instance& instance, VkPhysicalDevice physical,
         new VkDevice(external),
         [](VkDevice* device) { delete device; }
     );
+    LSFG_FRAMEGEN_LOGI("Adopted-device init: creating fallback descriptor image");
     this->fallbackDescriptorImage = std::make_shared<Core::Image>(*this,
         VkExtent2D{1, 1}, VK_FORMAT_R8G8B8A8_UNORM,
         VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT
             | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+    LSFG_FRAMEGEN_LOGI("Adopted-device init: clearing fallback descriptor image");
     Utils::clearImage(*this, *this->fallbackDescriptorImage);
+    LSFG_FRAMEGEN_LOGI("Adopted-device init: fallback descriptor ready");
 }
