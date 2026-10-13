@@ -518,6 +518,20 @@ void LsContext::paceBaseFrame(int fpsLimit) {
         if (!readVsyncFile(conf.config_file, &this->vsyncPhaseNs, &this->vsyncPeriodNs)) {
             this->vsyncPhaseNs = 0;
             this->vsyncPeriodNs = 0;
+        } else if (this->pacerNextDueNs > 0) {
+            // Refresh the active deadline too, not only the cached grid.
+            // Otherwise the deadline free-runs from the first phase forever
+            // and beats against the display despite receiving new timestamps.
+            // Choose the nearest vblank, preserving the base-frame divisor's
+            // slot instead of selecting a new every-N-vblank phase each read.
+            int64_t correction = (this->vsyncPhaseNs - this->pacerNextDueNs)
+                % this->vsyncPeriodNs;
+            if (correction > this->vsyncPeriodNs / 2)
+                correction -= this->vsyncPeriodNs;
+            else if (correction < -this->vsyncPeriodNs / 2)
+                correction += this->vsyncPeriodNs;
+            this->pacerNextDueNs += correction;
+            this->pacerCorrectionNs = correction;
         }
     }
     if (targetNs > 0 && this->vsyncPeriodNs > 0) {
@@ -525,8 +539,10 @@ void LsContext::paceBaseFrame(int fpsLimit) {
             (targetNs + this->vsyncPeriodNs / 2) / this->vsyncPeriodNs) * this->vsyncPeriodNs;
         int64_t due = this->pacerNextDueNs;
         if (due <= 0 || due < entryNs - stepNs || due > entryNs + 2 * stepNs) {
-            due = this->vsyncPhaseNs
-                + ((entryNs - this->vsyncPhaseNs) / stepNs + 1) * stepNs;
+            // Normalized modulo also handles a phase just ahead of entry.
+            const int64_t offset = ((entryNs - this->vsyncPhaseNs) % stepNs
+                + stepNs) % stepNs;
+            due = entryNs + stepNs - offset;
         }
         sleepUntilNs(due);
         this->pacerAnchorNs = due;
@@ -1059,6 +1075,22 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
                 .genSkips      = this->statsGenSkips,
                 .seq           = this->statsSeq,
             });
+        // Low-rate diagnostics distinguish base-frame timing from generated
+        // output; the app's frame-time histogram only measures base frames.
+        if (statsNow - this->statsLogNs >= 2'000'000'000LL) {
+            this->statsLogNs = statsNow;
+            std::cerr << "lsfg-vk: pacing-grid-refresh"
+                << " base_fps=" << frames / windowSec
+                << " output_fps=" << static_cast<double>(this->statsPresents) / windowSec
+                << " work_ms=" << static_cast<double>(this->statsWorkNs) / 1e6 / frames
+                << " gen_late_ms=" << static_cast<double>(this->statsGenLateNs) / 1e6 / frames
+                << " gen_sleep_ms=" << static_cast<double>(this->statsGenSleepNs) / 1e6 / frames
+                << " gen_present_ms=" << static_cast<double>(this->statsGenPresentNs) / 1e6 / frames
+                << " real_present_ms=" << static_cast<double>(this->statsRealPresentNs) / 1e6 / frames
+                << " gen_skips=" << this->statsGenSkips
+                << " vsync_period_ns=" << this->vsyncPeriodNs
+                << " phase_correction_ns=" << this->pacerCorrectionNs << '\n';
+        }
         this->statsSeq.clear();
         this->statsPresents = 0;
         this->statsRealPresents = 0;
