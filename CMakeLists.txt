@@ -51,7 +51,7 @@ target_link_libraries(lsfg-vk PRIVATE
     lsfg-vk-framegen)
 
 if(ANDROID)
-    target_link_libraries(lsfg-vk PRIVATE android)
+    target_link_libraries(lsfg-vk PRIVATE nativewindow)
     target_include_directories(lsfg-vk PRIVATE "${ANDROID_NDK}/sources/android/native_app_glue")
 endif()
 
