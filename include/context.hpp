@@ -101,6 +101,7 @@ private:
 
     int64_t pacerAnchorNs{0};       // schedule anchor of the current real frame
     int64_t pacerNextDueNs{0};      // next vsync-grid slot for the real frame
+    int64_t pacerCorrectionNs{0};   // latest display-grid phase correction
     int64_t lastRealPresentNs{0};   // previous real-frame entry, for the EWMA
     uint64_t baseIntervalEwmaNs{0}; // measured real-frame interval
 
@@ -113,6 +114,7 @@ private:
     uint64_t statsPresents{0};      // presents (real + generated) in the window
     uint64_t statsRealPresents{0};  // real presents in the window
     int64_t statsWindowStartNs{0};
+    int64_t statsLogNs{0};          // rate-limit pacing diagnostics
 
     // per-stage timing accumulators for the stats window
     uint64_t statsWorkNs{0};        // copy fence wait + framegen + waitIdle
